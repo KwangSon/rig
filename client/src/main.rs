@@ -19,15 +19,17 @@ enum Commands {
         /// The path to clone into. Defaults to the repository name.
         path: Option<PathBuf>,
     },
-    /// Synchronizes the local workspace with the remote repository
-    Sync,
-    /// Shows the working tree status
-    Status,
-    /// Submits changes to the remote repository
-    Submit {
+    /// Fetches metadata from the remote repository without downloading files
+    Fetch,
+    /// Pulls changes from the remote repository and updates local files
+    Pull,
+    /// Pushes local changes to the remote repository, creating a new server revision
+    Push {
         #[arg(short, long)]
         message: String,
     },
+    /// Shows the working tree status
+    Status,
     /// Locks an artifact to prevent others from editing
     Lock {
         /// The path to the artifact to lock
@@ -57,17 +59,21 @@ fn main() {
             }
             // TODO: Add actual cloning logic
         }
-        Commands::Sync => {
-            println!("Syncing workspace...");
-            // TODO: Add actual sync logic
+        Commands::Fetch => {
+            println!("Fetching metadata from remote repository...");
+            // TODO: Add actual fetch logic
+        }
+        Commands::Pull => {
+            println!("Pulling changes and updating local files...");
+            // TODO: Add actual pull logic
+        }
+        Commands::Push { message } => {
+            println!("Pushing changes with message: '{}'", message);
+            // TODO: Add actual push logic
         }
         Commands::Status => {
             println!("Showing status...");
             // TODO: Add actual status logic
-        }
-        Commands::Submit { message } => {
-            println!("Submitting changes with message: '{}'", message);
-            // TODO: Add actual submit logic
         }
         Commands::Lock { path } => {
             println!("Locking artifact at: {}", path.display());

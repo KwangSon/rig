@@ -6,6 +6,8 @@ use axum::{
     routing::{delete, get, post},
 };
 use serde::{Deserialize, Serialize};
+use std::env;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -120,6 +122,13 @@ type SharedState = Arc<Mutex<AppState>>;
 
 #[tokio::main]
 async fn main() {
+    let args: Vec<String> = env::args().collect();
+    let project_root = if args.len() > 1 {
+        PathBuf::from(&args[1])
+    } else {
+        PathBuf::from("examples")
+    };
+
     let state = SharedState::new(Mutex::new(AppState::default()));
 
     let app = Router::new()

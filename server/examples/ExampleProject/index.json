@@ -1,0 +1,12 @@
+{
+  "artifacts": {
+    "A": {
+      "latest": 3,
+      "revisions": [1, 2, 3]
+    },
+    "B": {
+      "latest": 2,
+      "revisions": [1, 2]
+    }
+  }
+}
