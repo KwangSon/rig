@@ -7,6 +7,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json;
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -120,7 +121,7 @@ struct AppState {
     project_dir: PathBuf,
 }
 
-type SharedState = Arc<Mutex<AppState>>;
+type SharedState = Arc<Mutex<HashMap<String, AppState>>>;
 
 // --- Main ---
 
@@ -133,70 +134,53 @@ async fn main() {
         PathBuf::from("server/examples")
     };
 
-    // Determine actual project dir (where index.json lives)
-    let project_dir = find_project_dir(&base_dir).unwrap_or_else(|e| {
-        eprintln!("Error: {}", e);
-        std::process::exit(1);
-    });
-
-    // Load index.json and initialize artifacts
-    let index_path = project_dir.join("index.json");
-    let index_content = fs::read_to_string(&index_path).expect("Failed to read index.json");
-    let index: serde_json::Value =
-        serde_json::from_str(&index_content).expect("Failed to parse index.json");
-
-    let artifacts: Vec<Artifact> = index["artifacts"]
-        .as_object()
-        .unwrap()
-        .iter()
-        .map(|(k, v)| {
-            let path = v["path"].as_str().unwrap();
-            let latest = v["latest"].as_u64().unwrap() as u32;
-            let locked_by = v["locked_by"].as_str();
-            let revisions: Vec<Revision> = v["revisions"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|r| Revision {
-                    revision: r["rev"].as_u64().unwrap() as u32,
-                    message: "".to_string(), // No message in index.json
-                })
-                .collect();
-            Artifact {
-                id: k.clone(),
-                path: path.to_string(),
-                latest_revision: latest,
-                revisions,
-                lock: locked_by.map(|u| Lock {
-                    user: u.to_string(),
-                }),
+    // Collect all projects under the base directory (any subdirectory with index.json)
+    let mut projects: HashMap<String, AppState> = HashMap::new();
+    if let Ok(entries) = fs::read_dir(&base_dir) {
+        for entry in entries.flatten() {
+            if let Ok(metadata) = entry.metadata() {
+                if metadata.is_dir() {
+                    let candidate_dir = entry.path();
+                    let index_path = candidate_dir.join("index.json");
+                    if index_path.exists() {
+                        if let Some(project_name) =
+                            candidate_dir.file_name().and_then(|s| s.to_str())
+                        {
+                            if let Ok(app_state) =
+                                load_project_state(project_name.to_string(), &candidate_dir)
+                            {
+                                projects.insert(project_name.to_string(), app_state);
+                            }
+                        }
+                    }
+                }
             }
-        })
-        .collect();
+        }
+    }
 
-    let state = SharedState::new(Mutex::new(AppState {
-        users: vec![],
-        artifacts,
-        project_dir: project_dir.clone(),
-    }));
+    let state: SharedState = Arc::new(Mutex::new(projects));
 
     let app = Router::new()
         .route("/health", get(health_handler))
+        .route("/{project}/index.json", get(artifacts::get_index_handler))
         .route(
-            "/users",
+            "/{project}/users",
             post(users::create_user_handler).get(users::get_users_handler),
         )
         .route(
-            "/artifacts",
+            "/{project}/artifacts",
             post(artifacts::create_artifact_handler).get(artifacts::get_artifacts_handler),
         )
-        .route("/artifacts/{id}", get(artifacts::get_artifact_info_handler))
         .route(
-            "/artifacts/{id}/revisions",
+            "/{project}/artifacts/{id}",
+            get(artifacts::get_artifact_info_handler),
+        )
+        .route(
+            "/{project}/artifacts/{id}/revisions",
             post(artifacts::create_revision_handler).get(artifacts::get_revisions_handler),
         )
         .route(
-            "/artifacts/{id}/lock",
+            "/{project}/artifacts/{id}/lock",
             post(artifacts::lock_handler)
                 .delete(artifacts::unlock_handler)
                 .get(artifacts::get_lock_handler),
@@ -211,37 +195,46 @@ async fn main() {
     axum::serve(listener, app).await.expect("Server failed");
 }
 
-fn find_project_dir(base: &PathBuf) -> Result<PathBuf, String> {
-    let index = base.join("index.json");
-    if index.exists() {
-        return Ok(base.clone());
-    }
+fn load_project_state(project_name: String, project_dir: &PathBuf) -> Result<AppState, String> {
+    let index_path = project_dir.join("index.json");
+    let index_content = fs::read_to_string(&index_path).map_err(|e| e.to_string())?;
+    let index: serde_json::Value =
+        serde_json::from_str(&index_content).map_err(|e| e.to_string())?;
 
-    let mut candidates = Vec::new();
-    if let Ok(entries) = fs::read_dir(base) {
-        for entry in entries.flatten() {
-            if let Ok(metadata) = entry.metadata() {
-                if metadata.is_dir() {
-                    let candidate = entry.path();
-                    if candidate.join("index.json").exists() {
-                        candidates.push(candidate);
-                    }
-                }
+    let artifacts: Vec<Artifact> = index["artifacts"]
+        .as_object()
+        .ok_or("Invalid index.json: artifacts is not an object".to_string())?
+        .iter()
+        .map(|(k, v)| {
+            let path = v["path"].as_str().unwrap_or("");
+            let latest = v["latest"].as_u64().unwrap_or(0) as u32;
+            let locked_by = v["locked_by"].as_str();
+            let revisions: Vec<Revision> = v["revisions"]
+                .as_array()
+                .unwrap_or(&vec![])
+                .iter()
+                .map(|r| Revision {
+                    revision: r["rev"].as_u64().unwrap_or(0) as u32,
+                    message: "".to_string(),
+                })
+                .collect();
+            Artifact {
+                id: k.clone(),
+                path: path.to_string(),
+                latest_revision: latest,
+                revisions,
+                lock: locked_by.map(|u| Lock {
+                    user: u.to_string(),
+                }),
             }
-        }
-    }
+        })
+        .collect();
 
-    match candidates.as_slice() {
-        [single] => Ok(single.clone()),
-        [] => Err(format!(
-            "No index.json found in '{}' or its immediate subdirectories",
-            base.display()
-        )),
-        _ => Err(format!(
-            "Multiple projects found in '{}', please specify one directly",
-            base.display()
-        )),
-    }
+    Ok(AppState {
+        users: vec![],
+        artifacts,
+        project_dir: project_dir.clone(),
+    })
 }
 
 // --- Handlers ---

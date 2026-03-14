@@ -10,7 +10,26 @@ struct PushPayload {
     message: Option<String>,
 }
 
-pub async fn run(message: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run(message: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+    // Determine message: prefer provided, fallback to last local commit message.
+    let message = if let Some(m) = message {
+        m
+    } else {
+        // Read local index to find last commit message
+        let current_dir = std::env::current_dir()?;
+        let rig_dir = current_dir.join(".rig");
+        let index_path = rig_dir.join("index.json");
+        let index_content = std::fs::read_to_string(&index_path)
+            .map_err(|e| format!("Failed to read local index.json: {}", e))?;
+        let local_index: super::status::IndexFile = serde_json::from_str(&index_content)
+            .map_err(|e| format!("Failed to parse local index.json: {}", e))?;
+        local_index
+            .commits
+            .last()
+            .map(|c| c.message.clone())
+            .unwrap_or_default()
+    };
+
     println!("Running rig push with message: '{}'", message);
 
     let current_dir = std::env::current_dir()?;
@@ -57,7 +76,10 @@ pub async fn run(message: &str) -> Result<(), Box<dyn std::error::Error>> {
         };
 
         // Push new revision
-        let rev_url = format!("{}/artifacts/{}/revisions", server_url, artifact_name);
+        let rev_url = format!(
+            "{}/{}/artifacts/{}/revisions",
+            server_url, local_index.project, artifact_name
+        );
         let resp = client.post(&rev_url).json(&payload).send().await?;
         if !resp.status().is_success() {
             return Err(format!("Failed to push revision: {}", resp.status()).into());
@@ -73,7 +95,10 @@ pub async fn run(message: &str) -> Result<(), Box<dyn std::error::Error>> {
         });
 
         // Unlock on server
-        let unlock_url = format!("{}/artifacts/{}/lock", server_url, artifact_name);
+        let unlock_url = format!(
+            "{}/{}/artifacts/{}/lock",
+            server_url, local_index.project, artifact_name
+        );
         let unlock_resp = client.delete(&unlock_url).send().await?;
         if !unlock_resp.status().is_success() {
             return Err(format!("Failed to unlock after push: {}", unlock_resp.status()).into());

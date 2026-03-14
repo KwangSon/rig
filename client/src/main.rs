@@ -4,6 +4,18 @@ use serde_json;
 use std::path::PathBuf;
 
 mod commands;
+use crate::commands::status::IndexFile;
+
+fn resolve_artifact_id(index: &IndexFile, query: &str) -> Option<String> {
+    if index.artifacts.contains_key(query) {
+        return Some(query.to_string());
+    }
+    index
+        .artifacts
+        .iter()
+        .find(|(_, details)| details.path == query)
+        .map(|(id, _)| id.clone())
+}
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -34,6 +46,13 @@ enum Commands {
     },
     /// Pushes local changes to the remote repository, creating a new server revision
     Push {
+        /// Optional commit message (defaults to the last local commit message if omitted)
+        #[arg(short, long)]
+        message: Option<String>,
+    },
+    /// Creates a new local commit (does not push to server)
+    Commit {
+        /// Commit message
         #[arg(short, long)]
         message: String,
     },
@@ -92,8 +111,14 @@ async fn main() {
             }
         }
         Commands::Push { message } => {
-            if let Err(e) = commands::push::run(message).await {
+            if let Err(e) = commands::push::run(message.clone()).await {
                 eprintln!("[error] Failed to push: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Commands::Commit { message } => {
+            if let Err(e) = commands::commit::run(message).await {
+                eprintln!("[error] Failed to commit: {}", e);
                 std::process::exit(1);
             }
         }
@@ -137,18 +162,18 @@ async fn lock_artifact(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>>
     // Read index.json
     let index_path = rig_dir.join("index.json");
     let index_content = std::fs::read_to_string(&index_path)?;
-    let index: serde_json::Value = serde_json::from_str(&index_content)?;
-    let _project = index["project"].as_str().ok_or("Invalid index.json")?;
-    let path_str = path.to_string_lossy();
+    let index: IndexFile = serde_json::from_str(&index_content)?;
 
-    // Check if artifact exists
-    if !index["artifacts"].get(&*path_str).is_some() {
-        return Err(format!("Artifact '{}' not found", path_str).into());
-    }
+    let path_str = path.to_string_lossy().to_string();
+    let artifact_id = resolve_artifact_id(&index, &path_str)
+        .ok_or_else(|| format!("Artifact '{}' not found", path_str))?;
 
-    // Send POST to server (lock endpoint is not namespaced by project)
+    // Send POST to server (lock endpoint is namespaced by project)
     let client = reqwest::Client::new();
-    let url = format!("http://localhost:3000/artifacts/{}/lock", path_str);
+    let url = format!(
+        "http://localhost:3000/{}/artifacts/{}/lock",
+        index.project, artifact_id
+    );
     let body = serde_json::json!({"user": "alice"});
     let resp = client.post(&url).json(&body).send().await?;
     if !resp.status().is_success() {
@@ -159,13 +184,16 @@ async fn lock_artifact(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>>
         return Err("Lock request denied by server".into());
     }
 
-    // Change local file permission to writable
-    let local_path = current_dir.join(&*path_str);
+    // Change local file permission to writable (use the effective artifact path)
+    let local_path = current_dir.join(&index.artifacts[&artifact_id].path);
     if local_path.exists() {
         let mut perms = std::fs::metadata(&local_path)?.permissions();
         perms.set_readonly(false);
         std::fs::set_permissions(&local_path, perms)?;
-        println!("Artifact '{}' is now writable", path_str);
+        println!(
+            "Artifact '{}' is now writable",
+            index.artifacts[&artifact_id].path
+        );
     }
 
     Ok(())
@@ -184,30 +212,33 @@ async fn unlock_artifact(path: &PathBuf) -> Result<(), Box<dyn std::error::Error
     // Read index.json
     let index_path = rig_dir.join("index.json");
     let index_content = std::fs::read_to_string(&index_path)?;
-    let index: serde_json::Value = serde_json::from_str(&index_content)?;
-    let _project = index["project"].as_str().ok_or("Invalid index.json")?;
-    let path_str = path.to_string_lossy();
+    let index: IndexFile = serde_json::from_str(&index_content)?;
 
-    // Check if artifact exists
-    if !index["artifacts"].get(&*path_str).is_some() {
-        return Err(format!("Artifact '{}' not found", path_str).into());
-    }
+    let path_str = path.to_string_lossy().to_string();
+    let artifact_id = resolve_artifact_id(&index, &path_str)
+        .ok_or_else(|| format!("Artifact '{}' not found", path_str))?;
 
-    // Send DELETE to server (unlock endpoint is not namespaced by project)
+    // Send DELETE to server (unlock endpoint is namespaced by project)
     let client = reqwest::Client::new();
-    let url = format!("http://localhost:3000/artifacts/{}/lock", path_str);
+    let url = format!(
+        "http://localhost:3000/{}/artifacts/{}/lock",
+        index.project, artifact_id
+    );
     let resp = client.delete(&url).send().await?;
     if !resp.status().is_success() {
         return Err(format!("Unlock request failed: {}", resp.status()).into());
     }
 
-    // Change local file permission to read-only
-    let local_path = current_dir.join(&*path_str);
+    // Change local file permission to read-only (use the effective artifact path)
+    let local_path = current_dir.join(&index.artifacts[&artifact_id].path);
     if local_path.exists() {
         let mut perms = std::fs::metadata(&local_path)?.permissions();
         perms.set_readonly(true);
         std::fs::set_permissions(&local_path, perms)?;
-        println!("Artifact '{}' is now read-only", path_str);
+        println!(
+            "Artifact '{}' is now read-only",
+            index.artifacts[&artifact_id].path
+        );
     }
 
     Ok(())

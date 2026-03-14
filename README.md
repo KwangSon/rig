@@ -7,12 +7,11 @@ Rig is a tool designed to manage binary assets efficiently while being fully Git
 ```
 rig clone
 rig status
-rig diff
 rig pull <path>
 
 rig lock <path>
-rig unlock <path>
 
+rig add <path>
 rig commit -m "message"
 rig push
 

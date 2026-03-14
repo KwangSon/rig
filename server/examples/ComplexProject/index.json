@@ -1,0 +1,122 @@
+{
+  "artifacts": {
+    "binary": {
+      "latest": 1,
+      "locked_by": null,
+      "path": "bin/tool",
+      "revisions": [
+        {
+          "hash": "",
+          "rev": 1
+        }
+      ]
+    },
+    "config": {
+      "latest": 1,
+      "locked_by": null,
+      "path": "config/settings.toml",
+      "revisions": [
+        {
+          "hash": "",
+          "rev": 1
+        }
+      ]
+    },
+    "docs_guide": {
+      "latest": 1,
+      "locked_by": null,
+      "path": "docs/guide.md",
+      "revisions": [
+        {
+          "hash": "",
+          "rev": 1
+        }
+      ]
+    },
+    "readme": {
+      "latest": 2,
+      "locked_by": null,
+      "path": "README.md",
+      "revisions": [
+        {
+          "hash": "",
+          "rev": 1
+        },
+        {
+          "hash": "",
+          "rev": 2
+        }
+      ]
+    },
+    "src_main": {
+      "latest": 2,
+      "locked_by": "alice",
+      "path": "src/main.rs",
+      "revisions": [
+        {
+          "hash": "",
+          "rev": 1
+        },
+        {
+          "hash": "",
+          "rev": 2
+        }
+      ]
+    }
+  },
+  "commits": [
+    {
+      "artifacts": {
+        "docs_guide": 1,
+        "readme": 1,
+        "src_main": 1
+      },
+      "id": 1,
+      "message": "initial import"
+    },
+    {
+      "artifacts": {
+        "config": 1,
+        "docs_guide": 1,
+        "readme": 1,
+        "src_main": 1
+      },
+      "id": 2,
+      "message": "add config"
+    },
+    {
+      "artifacts": {
+        "config": 1,
+        "docs_guide": 1,
+        "readme": 1,
+        "src_main": 2
+      },
+      "id": 3,
+      "message": "fix typo in main"
+    },
+    {
+      "artifacts": {
+        "binary": 1,
+        "config": 1,
+        "docs_guide": 1,
+        "readme": 1,
+        "src_main": 2
+      },
+      "id": 4,
+      "message": "add binary tool"
+    },
+    {
+      "artifacts": {
+        "binary": 1,
+        "config": 1,
+        "docs_guide": 1,
+        "readme": 2,
+        "src_main": 2
+      },
+      "id": 5,
+      "message": "update README"
+    }
+  ],
+  "latest_commit": 5,
+  "project": "ComplexProject"
+}

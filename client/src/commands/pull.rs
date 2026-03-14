@@ -80,12 +80,23 @@ pub async fn run(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     println!("   Remote metadata fetched successfully.");
 
     // 3. Determine which artifacts to pull
+    fn resolve_artifact_id(index: &IndexFile, query: &str) -> Option<String> {
+        if index.artifacts.contains_key(query) {
+            return Some(query.to_string());
+        }
+        index
+            .artifacts
+            .iter()
+            .find(|(_, details)| details.path == query)
+            .map(|(id, _)| id.clone())
+    }
+
     let artifacts_to_pull: Vec<String> = if path == PathBuf::from("*") {
         remote_index.artifacts.keys().cloned().collect()
     } else {
         let path_str = path.to_string_lossy().to_string();
-        if remote_index.artifacts.contains_key(&path_str) {
-            vec![path_str]
+        if let Some(id) = resolve_artifact_id(&remote_index, &path_str) {
+            vec![id]
         } else {
             return Err(format!("Artifact '{}' not found on server", path_str).into());
         }
@@ -123,6 +134,11 @@ pub async fn run(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 
         // Save to workspace root with path name
         let local_path = current_dir.join(&artifact_details.path);
+
+        // Ensure parent directories exist (for nested paths)
+        if let Some(parent) = local_path.parent() {
+            fs::create_dir_all(parent).ok();
+        }
 
         // If file exists, make it writable first
         if local_path.exists() {

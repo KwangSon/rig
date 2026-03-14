@@ -2,6 +2,9 @@
 
 ## Setup commands
 - Install deps: `cargo add -p {target} xxx`
-- Start dev server: `cargo run -p server -- server/examples`
-- Start client: `cargo run -p client`
+
 - `cargo fmt`
+
+## Testing
+- Start dev server: `cargo run -p server -- server/examples`
+- Start client: `cargo run -p client -- clone http://localhost:3000/ComplexProject`

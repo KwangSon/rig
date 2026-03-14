@@ -5,6 +5,7 @@ use axum::{
 };
 use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Serialize};
+use serde_json;
 use std::fs;
 
 use crate::{AppState, Artifact, Lock, LockRequest, LockResponse, Revision, SharedState};
@@ -53,10 +54,22 @@ pub struct CreateRevisionResponse {
 // Placeholder implementations
 
 pub async fn create_artifact_handler(
+    Path(project): Path<String>,
     State(state): State<SharedState>,
     Json(payload): Json<CreateArtifactRequest>,
 ) -> (StatusCode, Json<CreateArtifactResponse>) {
-    let mut app_state = state.lock().await;
+    let mut projects = state.lock().await;
+    let app_state = match projects.get_mut(&project) {
+        Some(s) => s,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(CreateArtifactResponse {
+                    artifact_id: payload.path,
+                }),
+            );
+        }
+    };
 
     if app_state.artifacts.iter().any(|a| a.id == payload.path) {
         return (
@@ -110,31 +123,63 @@ pub async fn create_artifact_handler(
 }
 
 pub async fn get_artifacts_handler(
-    State(_state): State<SharedState>,
+    Path(project): Path<String>,
+    State(state): State<SharedState>,
 ) -> Json<Vec<ArtifactShortResponse>> {
-    Json(vec![ArtifactShortResponse {
-        id: "a1".to_string(),
-        path: "A".to_string(),
-    }])
+    let projects = state.lock().await;
+    if let Some(app_state) = projects.get(&project) {
+        Json(
+            app_state
+                .artifacts
+                .iter()
+                .map(|a| ArtifactShortResponse {
+                    id: a.id.clone(),
+                    path: a.path.clone(),
+                })
+                .collect(),
+        )
+    } else {
+        Json(vec![])
+    }
 }
 
 pub async fn get_artifact_info_handler(
-    Path(_id): Path<String>,
-    State(_state): State<SharedState>,
+    Path((project, id)): Path<(String, String)>,
+    State(state): State<SharedState>,
 ) -> Json<ArtifactInfoResponse> {
+    let projects = state.lock().await;
+    if let Some(app_state) = projects.get(&project) {
+        if let Some(artifact) = app_state.artifacts.iter().find(|a| a.id == id) {
+            return Json(ArtifactInfoResponse {
+                id: artifact.id.clone(),
+                path: artifact.path.clone(),
+                latest_revision: artifact.latest_revision,
+            });
+        }
+    }
+
     Json(ArtifactInfoResponse {
-        id: "a1".to_string(),
-        path: "A".to_string(),
-        latest_revision: 3,
+        id: "".to_string(),
+        path: "".to_string(),
+        latest_revision: 0,
     })
 }
 
 pub async fn create_revision_handler(
-    Path(id): Path<String>,
+    Path((project, id)): Path<(String, String)>,
     State(state): State<SharedState>,
     Json(payload): Json<CreateRevisionRequest>,
 ) -> (StatusCode, Json<CreateRevisionResponse>) {
-    let mut app_state = state.lock().await;
+    let mut projects = state.lock().await;
+    let app_state = match projects.get_mut(&project) {
+        Some(s) => s,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(CreateRevisionResponse { revision: 0 }),
+            );
+        }
+    };
     let project_dir = app_state.project_dir.clone();
 
     let artifact = match app_state.artifacts.iter_mut().find(|a| a.id == id) {
@@ -188,31 +233,46 @@ pub async fn create_revision_handler(
 }
 
 pub async fn get_revisions_handler(
-    Path(id): Path<String>,
+    Path((project, id)): Path<(String, String)>,
     State(state): State<SharedState>,
 ) -> Json<Vec<RevisionShortResponse>> {
-    let app_state = state.lock().await;
-    if let Some(artifact) = app_state.artifacts.iter().find(|a| a.id == id) {
-        Json(
-            artifact
-                .revisions
-                .iter()
-                .map(|r| RevisionShortResponse {
-                    revision: r.revision,
-                })
-                .collect(),
-        )
-    } else {
-        Json(vec![])
+    let projects = state.lock().await;
+    if let Some(app_state) = projects.get(&project) {
+        if let Some(artifact) = app_state.artifacts.iter().find(|a| a.id == id) {
+            return Json(
+                artifact
+                    .revisions
+                    .iter()
+                    .map(|r| RevisionShortResponse {
+                        revision: r.revision,
+                    })
+                    .collect(),
+            );
+        }
     }
+
+    Json(vec![])
 }
 
 pub async fn lock_handler(
-    Path(id): Path<String>,
+    Path((project, id)): Path<(String, String)>,
     State(state): State<SharedState>,
     Json(payload): Json<LockRequest>,
 ) -> (StatusCode, Json<LockResponse>) {
-    let mut app_state = state.lock().await;
+    let mut projects = state.lock().await;
+    let app_state = match projects.get_mut(&project) {
+        Some(s) => s,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(LockResponse {
+                    locked: false,
+                    user: None,
+                }),
+            );
+        }
+    };
+
     if let Some(artifact) = app_state.artifacts.iter_mut().find(|a| a.id == id) {
         if artifact.lock.is_none() {
             artifact.lock = Some(Lock {
@@ -259,10 +319,23 @@ pub async fn lock_handler(
 }
 
 pub async fn unlock_handler(
-    Path(id): Path<String>,
+    Path((project, id)): Path<(String, String)>,
     State(state): State<SharedState>,
 ) -> (StatusCode, Json<LockResponse>) {
-    let mut app_state = state.lock().await;
+    let mut projects = state.lock().await;
+    let app_state = match projects.get_mut(&project) {
+        Some(s) => s,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(LockResponse {
+                    locked: false,
+                    user: None,
+                }),
+            );
+        }
+    };
+
     if let Some(artifact) = app_state.artifacts.iter_mut().find(|a| a.id == id) {
         artifact.lock = None;
         // Persist lock state
@@ -288,21 +361,42 @@ pub async fn unlock_handler(
 }
 
 pub async fn get_lock_handler(
-    Path(id): Path<String>,
+    Path((project, id)): Path<(String, String)>,
     State(state): State<SharedState>,
 ) -> Json<LockResponse> {
-    let app_state = state.lock().await;
-    if let Some(artifact) = app_state.artifacts.iter().find(|a| a.id == id) {
-        Json(LockResponse {
-            locked: artifact.lock.is_some(),
-            user: artifact.lock.as_ref().map(|l| l.user.clone()),
-        })
-    } else {
-        Json(LockResponse {
-            locked: false,
-            user: None,
-        })
+    let projects = state.lock().await;
+    if let Some(app_state) = projects.get(&project) {
+        if let Some(artifact) = app_state.artifacts.iter().find(|a| a.id == id) {
+            return Json(LockResponse {
+                locked: artifact.lock.is_some(),
+                user: artifact.lock.as_ref().map(|l| l.user.clone()),
+            });
+        }
     }
+
+    Json(LockResponse {
+        locked: false,
+        user: None,
+    })
+}
+
+pub async fn get_index_handler(
+    Path(project): Path<String>,
+    State(state): State<SharedState>,
+) -> Json<serde_json::Value> {
+    let projects = state.lock().await;
+    if let Some(app_state) = projects.get(&project) {
+        let index_path = app_state.project_dir.join("index.json");
+        if let Ok(content) = fs::read_to_string(&index_path) {
+            if let Ok(value) = serde_json::from_str(&content) {
+                return Json(value);
+            }
+        }
+    }
+
+    Json(serde_json::json!({
+        "error": "project not found",
+    }))
 }
 
 fn persist_index(app_state: &AppState) -> Result<(), String> {

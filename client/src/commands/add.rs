@@ -72,7 +72,10 @@ pub async fn run(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         );
 
         // Confirm lock
-        let lock_url = format!("{}/artifacts/{}/lock", server_url, artifact_name);
+        let lock_url = format!(
+            "{}/{}/artifacts/{}/lock",
+            server_url, project, artifact_name
+        );
         let lock_resp = client.get(&lock_url).send().await?;
         if !lock_resp.status().is_success() {
             return Err(format!("Failed to query lock state: {}", lock_resp.status()).into());
@@ -90,7 +93,10 @@ pub async fn run(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         }
 
         println!("-> Uploading revised artifact to server...");
-        let rev_url = format!("{}/artifacts/{}/revisions", server_url, artifact_name);
+        let rev_url = format!(
+            "{}/{}/artifacts/{}/revisions",
+            server_url, project, artifact_name
+        );
         let resp = client.post(&rev_url).json(&payload).send().await?;
         if !resp.status().is_success() {
             return Err(format!("Failed to add revision: {}", resp.status()).into());
@@ -106,7 +112,7 @@ pub async fn run(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         }
     } else {
         println!("Artifact '{}' is new; creating on server...", artifact_name);
-        let create_url = format!("{}/artifacts", server_url);
+        let create_url = format!("{}/{}/artifacts", server_url, project);
         let resp = client.post(&create_url).json(&payload).send().await?;
         if !resp.status().is_success() {
             return Err(format!("Failed to create artifact: {}", resp.status()).into());
