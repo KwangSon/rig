@@ -1,6 +1,8 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
+mod commands;
+
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
@@ -42,7 +44,8 @@ enum Commands {
     },
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let cli = Cli::parse();
 
     match &cli.command {
@@ -51,13 +54,10 @@ fn main() {
             // TODO: Add actual initialization logic
         }
         Commands::Clone { url, path } => {
-            println!("Cloning repository from: {}", url);
-            if let Some(p) = path {
-                println!("Cloning into: {}", p.display());
-            } else {
-                println!("Cloning into a directory derived from the URL.");
+            if let Err(e) = commands::clone::run(url, path).await {
+                eprintln!("[error] Failed to clone repository: {}", e);
+                std::process::exit(1);
             }
-            // TODO: Add actual cloning logic
         }
         Commands::Fetch => {
             println!("Fetching metadata from remote repository...");
@@ -76,12 +76,20 @@ fn main() {
             // TODO: Add actual status logic
         }
         Commands::Lock { path } => {
-            println!("Locking artifact at: {}", path.display());
-            // TODO: Add actual lock logic
+            lock_artifact(path);
         }
         Commands::Unlock { path } => {
-            println!("Unlocking artifact at: {}", path.display());
-            // TODO: Add actual unlock logic
+            unlock_artifact(path);
         }
     }
+}
+
+fn lock_artifact(path: &PathBuf) {
+    println!("Locking artifact at: {}", path.display());
+    println!("Sending lock request to server... (placeholder for HTTP logic)");
+}
+
+fn unlock_artifact(path: &PathBuf) {
+    println!("Unlocking artifact at: {}", path.display());
+    println!("Sending unlock request to server... (placeholder for HTTP logic)");
 }

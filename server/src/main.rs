@@ -10,6 +10,7 @@ use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tower_http::services::ServeDir;
 
 // --- Data Structures ---
 
@@ -152,7 +153,8 @@ async fn main() {
                 .delete(artifacts::unlock_handler)
                 .get(artifacts::get_lock_handler),
         )
-        .with_state(state);
+        .with_state(state)
+        .fallback_service(ServeDir::new(project_root));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     println!("Listening on {}", listener.local_addr().unwrap());
