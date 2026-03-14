@@ -72,8 +72,10 @@ async fn main() {
             // TODO: Add actual push logic
         }
         Commands::Status => {
-            println!("Showing status...");
-            // TODO: Add actual status logic
+            if let Err(e) = commands::status::run().await {
+                eprintln!("[error] Failed to get status: {}", e);
+                std::process::exit(1);
+            }
         }
         Commands::Lock { path } => {
             lock_artifact(path);
