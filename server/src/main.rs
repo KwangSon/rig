@@ -6,7 +6,9 @@ use axum::{
     routing::{delete, get, post},
 };
 use serde::{Deserialize, Serialize};
+use serde_json;
 use std::env;
+use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -115,6 +117,7 @@ struct LockResponse {
 struct AppState {
     users: Vec<User>,
     artifacts: Vec<Artifact>,
+    project_dir: PathBuf,
 }
 
 type SharedState = Arc<Mutex<AppState>>;
@@ -124,13 +127,58 @@ type SharedState = Arc<Mutex<AppState>>;
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = env::args().collect();
-    let project_root = if args.len() > 1 {
+    let base_dir = if args.len() > 1 {
         PathBuf::from(&args[1])
     } else {
-        PathBuf::from("examples")
+        PathBuf::from("server/examples")
     };
 
-    let state = SharedState::new(Mutex::new(AppState::default()));
+    // Determine actual project dir (where index.json lives)
+    let project_dir = find_project_dir(&base_dir).unwrap_or_else(|e| {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    });
+
+    // Load index.json and initialize artifacts
+    let index_path = project_dir.join("index.json");
+    let index_content = fs::read_to_string(&index_path).expect("Failed to read index.json");
+    let index: serde_json::Value =
+        serde_json::from_str(&index_content).expect("Failed to parse index.json");
+
+    let artifacts: Vec<Artifact> = index["artifacts"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .map(|(k, v)| {
+            let path = v["path"].as_str().unwrap();
+            let latest = v["latest"].as_u64().unwrap() as u32;
+            let locked_by = v["locked_by"].as_str();
+            let revisions: Vec<Revision> = v["revisions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| Revision {
+                    revision: r["rev"].as_u64().unwrap() as u32,
+                    message: "".to_string(), // No message in index.json
+                })
+                .collect();
+            Artifact {
+                id: k.clone(),
+                path: path.to_string(),
+                latest_revision: latest,
+                revisions,
+                lock: locked_by.map(|u| Lock {
+                    user: u.to_string(),
+                }),
+            }
+        })
+        .collect();
+
+    let state = SharedState::new(Mutex::new(AppState {
+        users: vec![],
+        artifacts,
+        project_dir: project_dir.clone(),
+    }));
 
     let app = Router::new()
         .route("/health", get(health_handler))
@@ -154,11 +202,46 @@ async fn main() {
                 .get(artifacts::get_lock_handler),
         )
         .with_state(state)
-        .fallback_service(ServeDir::new(project_root));
+        .fallback_service(ServeDir::new(base_dir));
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+        .await
+        .expect("Failed to bind to port 3000");
     println!("Listening on {}", listener.local_addr().unwrap());
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(listener, app).await.expect("Server failed");
+}
+
+fn find_project_dir(base: &PathBuf) -> Result<PathBuf, String> {
+    let index = base.join("index.json");
+    if index.exists() {
+        return Ok(base.clone());
+    }
+
+    let mut candidates = Vec::new();
+    if let Ok(entries) = fs::read_dir(base) {
+        for entry in entries.flatten() {
+            if let Ok(metadata) = entry.metadata() {
+                if metadata.is_dir() {
+                    let candidate = entry.path();
+                    if candidate.join("index.json").exists() {
+                        candidates.push(candidate);
+                    }
+                }
+            }
+        }
+    }
+
+    match candidates.as_slice() {
+        [single] => Ok(single.clone()),
+        [] => Err(format!(
+            "No index.json found in '{}' or its immediate subdirectories",
+            base.display()
+        )),
+        _ => Err(format!(
+            "Multiple projects found in '{}', please specify one directly",
+            base.display()
+        )),
+    }
 }
 
 // --- Handlers ---
@@ -202,105 +285,4 @@ mod users {
 
 // --- Artifacts Module ---
 
-mod artifacts {
-    use super::*;
-    use axum::{
-        extract::{Path, State},
-        http::StatusCode,
-        response::Json,
-    };
-
-    // POST /artifacts
-    pub async fn create_artifact_handler(
-        State(_state): State<SharedState>,
-        Json(_payload): Json<CreateArtifactRequest>,
-    ) -> (StatusCode, Json<CreateArtifactResponse>) {
-        // Placeholder implementation
-        (
-            StatusCode::CREATED,
-            Json(CreateArtifactResponse {
-                artifact_id: "a1".to_string(),
-            }),
-        )
-    }
-
-    // GET /artifacts
-    pub async fn get_artifacts_handler(
-        State(_state): State<SharedState>,
-    ) -> Json<Vec<ArtifactShortResponse>> {
-        // Placeholder implementation
-        Json(vec![ArtifactShortResponse {
-            id: "a1".to_string(),
-            path: "/path/to/artifact".to_string(),
-        }])
-    }
-
-    // GET /artifacts/{id}
-    pub async fn get_artifact_info_handler(
-        State(_state): State<SharedState>,
-        Path(_id): Path<String>,
-    ) -> Result<Json<ArtifactInfoResponse>, StatusCode> {
-        // Placeholder implementation
-        Ok(Json(ArtifactInfoResponse {
-            id: "a1".to_string(),
-            path: "/path/to/artifact".to_string(),
-            latest_revision: 1,
-        }))
-    }
-
-    // POST /artifacts/{id}/revisions
-    pub async fn create_revision_handler(
-        State(_state): State<SharedState>,
-        Path(_id): Path<String>,
-        Json(_payload): Json<CreateRevisionRequest>,
-    ) -> Result<(StatusCode, Json<CreateRevisionResponse>), StatusCode> {
-        // Placeholder implementation
-        Ok((
-            StatusCode::CREATED,
-            Json(CreateRevisionResponse { revision: 1 }),
-        ))
-    }
-
-    // GET /artifacts/{id}/revisions
-    pub async fn get_revisions_handler(
-        State(_state): State<SharedState>,
-        Path(_id): Path<String>,
-    ) -> Result<Json<Vec<RevisionShortResponse>>, StatusCode> {
-        // Placeholder implementation
-        Ok(Json(vec![RevisionShortResponse { revision: 1 }]))
-    }
-
-    // POST /artifacts/{id}/lock
-    pub async fn lock_handler(
-        State(_state): State<SharedState>,
-        Path(_id): Path<String>,
-        Json(_payload): Json<LockRequest>,
-    ) -> Result<Json<LockResponse>, StatusCode> {
-        // Placeholder implementation
-        Ok(Json(LockResponse {
-            locked: true,
-            user: Some("user1".to_string()),
-        }))
-    }
-
-    // DELETE /artifacts/{id}/lock
-    pub async fn unlock_handler(
-        State(_state): State<SharedState>,
-        Path(_id): Path<String>,
-    ) -> Result<StatusCode, StatusCode> {
-        // Placeholder implementation
-        Ok(StatusCode::NO_CONTENT)
-    }
-
-    // GET /artifacts/{id}/lock
-    pub async fn get_lock_handler(
-        State(_state): State<SharedState>,
-        Path(_id): Path<String>,
-    ) -> Result<Json<LockResponse>, StatusCode> {
-        // Placeholder implementation
-        Ok(Json(LockResponse {
-            locked: false,
-            user: None,
-        }))
-    }
-}
+mod artifacts;
