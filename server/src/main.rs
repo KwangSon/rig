@@ -18,12 +18,6 @@ use tower_http::services::ServeDir;
 // --- Data Structures ---
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-struct User {
-    id: String,
-    name: String,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
 struct Artifact {
     id: String,
     path: String,
@@ -46,8 +40,13 @@ struct Lock {
 // --- Request Payloads ---
 
 #[derive(Deserialize)]
-struct CreateUserRequest {
+struct CreateProjectRequest {
     name: String,
+}
+
+#[derive(Serialize)]
+struct CreateProjectResponse {
+    message: String,
 }
 
 #[derive(Deserialize)]
@@ -70,11 +69,6 @@ struct LockRequest {
 #[derive(Serialize)]
 struct HealthResponse {
     status: String,
-}
-
-#[derive(Serialize)]
-struct CreateUserResponse {
-    id: String,
 }
 
 #[derive(Serialize)]
@@ -116,7 +110,6 @@ struct LockResponse {
 
 #[derive(Default)]
 struct AppState {
-    users: Vec<User>,
     artifacts: Vec<Artifact>,
     project_dir: PathBuf,
 }
@@ -162,11 +155,8 @@ async fn main() {
 
     let app = Router::new()
         .route("/health", get(health_handler))
+        .route("/create_project", post(create_project_handler))
         .route("/{project}/index.json", get(artifacts::get_index_handler))
-        .route(
-            "/{project}/users",
-            post(users::create_user_handler).get(users::get_users_handler),
-        )
         .route(
             "/{project}/artifacts",
             post(artifacts::create_artifact_handler).get(artifacts::get_artifacts_handler),
@@ -231,7 +221,6 @@ fn load_project_state(project_name: String, project_dir: &PathBuf) -> Result<App
         .collect();
 
     Ok(AppState {
-        users: vec![],
         artifacts,
         project_dir: project_dir.clone(),
     })
@@ -246,33 +235,66 @@ async fn health_handler() -> Json<HealthResponse> {
     })
 }
 
-// --- Users Module ---
-
-mod users {
-    use super::*;
-    use axum::{extract::State, http::StatusCode, response::Json};
-
-    // POST /users
-    pub async fn create_user_handler(
-        State(_state): State<SharedState>,
-        Json(_payload): Json<CreateUserRequest>,
-    ) -> (StatusCode, Json<CreateUserResponse>) {
-        // Placeholder implementation
-        (
-            StatusCode::CREATED,
-            Json(CreateUserResponse {
-                id: "u1".to_string(),
+// POST /create_project
+async fn create_project_handler(
+    State(state): State<SharedState>,
+    Json(payload): Json<CreateProjectRequest>,
+) -> (StatusCode, Json<CreateProjectResponse>) {
+    let mut projects = state.lock().await;
+    if projects.contains_key(&payload.name) {
+        return (
+            StatusCode::CONFLICT,
+            Json(CreateProjectResponse {
+                message: "Project already exists".to_string(),
             }),
-        )
+        );
     }
 
-    // GET /users
-    pub async fn get_users_handler(State(_state): State<SharedState>) -> Json<Vec<User>> {
-        // Placeholder implementation
-        Json(vec![User {
-            id: "u1".to_string(),
-            name: "Alice".to_string(),
-        }])
+    // Create project directory
+    let project_dir = PathBuf::from("server/examples").join(&payload.name);
+    if let Err(_) = fs::create_dir_all(&project_dir) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(CreateProjectResponse {
+                message: "Failed to create project directory".to_string(),
+            }),
+        );
+    }
+
+    // Create initial index.json
+    let index_path = project_dir.join("index.json");
+    let initial_index = serde_json::json!({
+        "artifacts": {}
+    });
+    if let Err(_) = fs::write(
+        &index_path,
+        serde_json::to_string_pretty(&initial_index).unwrap(),
+    ) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(CreateProjectResponse {
+                message: "Failed to create index.json".to_string(),
+            }),
+        );
+    }
+
+    // Load the new project state
+    match load_project_state(payload.name.clone(), &project_dir) {
+        Ok(app_state) => {
+            projects.insert(payload.name, app_state);
+            (
+                StatusCode::CREATED,
+                Json(CreateProjectResponse {
+                    message: "Project created successfully".to_string(),
+                }),
+            )
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(CreateProjectResponse {
+                message: format!("Failed to load project: {}", e),
+            }),
+        ),
     }
 }
 

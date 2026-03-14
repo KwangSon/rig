@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
+use std::io::{self, Write};
 
 use crate::commands::status::IndexFile;
 
@@ -19,8 +20,21 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     fs::create_dir_all(&rig_dir)?;
 
+    // Prompt for server URL
+    print!("Enter server URL (default: http://localhost:3000): ");
+    io::stdout().flush()?;
+    let mut server_url = String::new();
+    io::stdin().read_line(&mut server_url)?;
+    let server_url = server_url.trim();
+    let server_url = if server_url.is_empty() {
+        "http://localhost:3000".to_string()
+    } else {
+        server_url.to_string()
+    };
+
     let initial_index = IndexFile {
         project: project_name.to_string(),
+        server_url,
         latest_commit: 0,
         artifacts: HashMap::new(),
         commits: Vec::new(),

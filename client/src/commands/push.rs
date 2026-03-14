@@ -45,8 +45,31 @@ pub async fn run(message: Option<String>) -> Result<(), Box<dyn std::error::Erro
     let mut local_index: IndexFile = serde_json::from_str(&local_index_content)
         .map_err(|e| format!("Failed to parse local index.json: {}", e))?;
 
-    let server_url = "http://localhost:3000";
+    let server_url = &local_index.server_url;
     let client = reqwest::Client::new();
+
+    // Check if project exists on server, create if not
+    let index_url = format!("{}/{}/index.json", server_url, local_index.project);
+    let resp = client.get(&index_url).send().await?;
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        println!(
+            "Project '{}' does not exist on server. Creating...",
+            local_index.project
+        );
+        let create_url = format!("{}/create_project", server_url);
+        let create_payload = serde_json::json!({
+            "name": local_index.project
+        });
+        let create_resp = client
+            .post(&create_url)
+            .json(&create_payload)
+            .send()
+            .await?;
+        if !create_resp.status().is_success() {
+            return Err(format!("Failed to create project: {}", create_resp.status()).into());
+        }
+        println!("Project created successfully.");
+    }
 
     let mut pushed_any = false;
 
