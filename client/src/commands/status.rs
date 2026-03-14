@@ -75,8 +75,16 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .into());
     }
     let remote_index_content = remote_resp.text().await?;
-    let remote_index: IndexFile = serde_json::from_str(&remote_index_content)
-        .map_err(|e| format!("Failed to parse remote index.json: {}", e))?;
+    let remote_index: IndexFile = match serde_json::from_str(&remote_index_content) {
+        Ok(idx) => idx,
+        Err(e) => {
+            return Err(format!(
+                "Failed to parse remote index.json: {}\n\
+This project does not exist on the server. You must run the 'init' command in an empty folder and ensure the project is successfully created on the server before proceeding.",
+                e
+            ).into());
+        }
+    };
     println!("   Remote metadata fetched successfully.");
 
     // 3. Compare local and server state

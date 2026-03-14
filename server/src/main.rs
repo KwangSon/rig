@@ -261,10 +261,14 @@ async fn create_project_handler(
         );
     }
 
-    // Create initial index.json
+    // Create initial index.json with all required fields
     let index_path = project_dir.join("index.json");
     let initial_index = serde_json::json!({
-        "artifacts": {}
+        "project": payload.name,
+        "server_url": "http://localhost:3000",
+        "artifacts": {},
+        "commits": [],
+        "latest_commit": 0
     });
     if let Err(_) = fs::write(
         &index_path,
