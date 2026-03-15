@@ -3,7 +3,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::Json,
 };
-use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
+use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -21,10 +21,17 @@ pub struct UserState {
 pub type SharedUserState = Arc<Mutex<UserState>>;
 
 const JWT_SECRET: &str = "your-secret-key"; // TODO: use env var
-
+pub fn decode_token(token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
+    decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(JWT_SECRET.as_ref()),
+        &Validation::default(),
+    )
+    .map(|data| data.claims)
+}
 #[derive(Serialize, Deserialize)]
 struct Claims {
-    sub: Uuid, // user id
+    pub sub: String, // user id
     exp: u64,
 }
 
@@ -131,6 +138,18 @@ pub async fn set_permission_handler(
     State(db): State<PgPool>,
     Json(payload): Json<SetPermissionRequest>,
 ) -> Result<(StatusCode, Json<Permission>), StatusCode> {
+    // Check if project exists
+    let project_exists = sqlx::query("SELECT id FROM projects WHERE name = $1")
+        .bind(&payload.project)
+        .fetch_optional(&db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .is_some();
+
+    if !project_exists {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
     // Upsert permission
     let permission = sqlx::query_as!(
         Permission,
@@ -266,10 +285,12 @@ pub async fn me_handler(
     )
     .map_err(|_| StatusCode::UNAUTHORIZED)?;
 
+    let user_id: Uuid = Uuid::parse_str(&token_data.claims.sub).unwrap();
+
     let user = sqlx::query_as!(
         User,
         "SELECT id, name, email, password_hash, role FROM users WHERE id = $1",
-        token_data.claims.sub
+        user_id
     )
     .fetch_optional(&db)
     .await

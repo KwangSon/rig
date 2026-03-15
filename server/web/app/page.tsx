@@ -5,7 +5,7 @@ import { useState, useEffect } from "react";
 const API_BASE = "http://localhost:3000/api/v1";
 
 export default function Home() {
-  const [projects, setProjects] = useState<string[]>([]);
+  const [projects, setProjects] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
   const [permissions, setPermissions] = useState<any[]>([]);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -262,6 +262,12 @@ export default function Home() {
                     <tbody className="divide-y divide-gray-200 bg-white">
                       {permissions.map((p, i) => {
                         const user = users.find((u) => u.id === p.user_id);
+                        const project = projects.find(
+                          (proj) => proj.name === p.project,
+                        );
+                        const isOwner =
+                          project && user && project.owner_id === user.id;
+                        const access = isOwner ? "owner" : p.access;
                         return (
                           <tr key={i}>
                             <td className="px-6 py-4 text-sm font-medium whitespace-nowrap text-gray-900">
@@ -271,7 +277,7 @@ export default function Home() {
                               {p.project}
                             </td>
                             <td className="px-6 py-4 text-sm whitespace-nowrap text-gray-500">
-                              {p.access}
+                              {access}
                             </td>
                           </tr>
                         );
@@ -305,8 +311,8 @@ export default function Home() {
                   >
                     <option value="">Select Project</option>
                     {projects.map((p) => (
-                      <option key={p} value={p}>
-                        {p}
+                      <option key={p.name} value={p.name}>
+                        {p.name}
                       </option>
                     ))}
                   </select>

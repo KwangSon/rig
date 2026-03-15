@@ -1,59 +1,23 @@
 use axum::{
     Router,
-    extract::{FromRef, State},
-    http::{Method, StatusCode},
+    extract::{FromRef, Path, State},
+    http::{HeaderMap, Method, StatusCode},
     response::Json,
-    routing,
     routing::{delete, get, post, put},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Path as StdPath, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
 
-use protocol::Artifact;
-
-// --- Migration Function ---
-
-async fn run_migrations(db: &sqlx::PgPool) -> Result<(), sqlx::Error> {
-    // Create users table
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS users (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            name TEXT NOT NULL,
-            email TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            role TEXT NOT NULL CHECK (role IN ('admin', 'user')),
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-        )
-        "#,
-    )
-    .execute(db)
-    .await?;
-
-    // Create permissions table
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS permissions (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            project TEXT NOT NULL,
-            access TEXT NOT NULL CHECK (access IN ('read', 'write', 'admin')),
-            UNIQUE(user_id, project)
-        )
-        "#,
-    )
-    .execute(db)
-    .await?;
-
-    Ok(())
-}
+use axum::routing;
+use sqlx::Row;
+use sqlx::types::Uuid;
 
 // --- App State ---
 
@@ -71,7 +35,7 @@ struct CreateProjectRequest {
     name: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 struct CreateProjectResponse {
     message: String,
 }
@@ -148,23 +112,22 @@ async fn main() {
         .expect("Failed to connect to database");
 
     // Run migrations
-    run_migrations(&db).await.expect("Failed to run migrations");
+    // run_migrations(&db).await.expect("Failed to run migrations");
 
-    // Collect all projects under the base directory (any subdirectory with index.json)
+    // Collect all projects from DB and load their state if directory exists
     let mut projects: HashMap<String, AppState> = HashMap::new();
-    if let Ok(entries) = fs::read_dir(&base_dir) {
-        for entry in entries.flatten() {
-            if let Ok(metadata) = entry.metadata()
-                && metadata.is_dir()
-            {
-                let candidate_dir = entry.path();
-                let index_path = candidate_dir.join("index.json");
-                if index_path.exists()
-                    && let Some(project_name) = candidate_dir.file_name().and_then(|s| s.to_str())
-                    && let Ok(app_state) = load_project_state(&candidate_dir)
-                {
-                    projects.insert(project_name.to_string(), app_state);
-                }
+    let project_names = sqlx::query("SELECT name FROM projects")
+        .fetch_all(&db)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|row| row.get::<String, _>("name"))
+        .collect::<Vec<String>>();
+    for name in project_names {
+        let project_dir = base_dir.join(&name);
+        if project_dir.exists() {
+            if let Ok(app_state) = load_project_state(&project_dir) {
+                projects.insert(name, app_state);
             }
         }
     }
@@ -190,6 +153,7 @@ async fn main() {
     let api_routes = Router::new()
         .route("/health", get(health_handler))
         .route("/projects", get(get_projects_handler))
+        .route("/projects/{name}", delete(delete_project_handler))
         .route("/create_project", post(create_project_handler))
         .route(
             "/users",
@@ -245,7 +209,7 @@ async fn main() {
     axum::serve(listener, app).await.expect("Server failed");
 }
 
-fn load_project_state(project_dir: &Path) -> Result<AppState, String> {
+fn load_project_state(project_dir: &StdPath) -> Result<AppState, String> {
     let index_path = project_dir.join("index.json");
     let index_content = fs::read_to_string(&index_path).map_err(|e| e.to_string())?;
     let index: serde_json::Value =
@@ -309,22 +273,99 @@ async fn health_handler() -> Json<HealthResponse> {
 }
 
 // GET /projects
-async fn get_projects_handler(State(state): State<SharedState>) -> Json<Vec<String>> {
-    let projects = state.lock().await;
-    Json(projects.keys().cloned().collect())
+async fn get_projects_handler(
+    State(combined): State<CombinedState>,
+) -> Json<Vec<serde_json::Value>> {
+    let projects = sqlx::query("SELECT name, owner_id FROM projects")
+        .fetch_all(&combined.db)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|row| serde_json::json!({"name": row.get::<String, _>("name"), "owner_id": row.get::<Uuid, _>("owner_id")}))
+        .collect();
+    Json(projects)
 }
 
 // POST /create_project
 async fn create_project_handler(
-    State(state): State<SharedState>,
+    State(combined): State<CombinedState>,
+    headers: HeaderMap,
     Json(payload): Json<CreateProjectRequest>,
 ) -> (StatusCode, Json<CreateProjectResponse>) {
-    let mut projects = state.lock().await;
-    if projects.contains_key(&payload.name) {
+    // Authenticate user
+    let auth_header = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .ok_or_else(|| {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(CreateProjectResponse {
+                    message: "Authorization required".to_string(),
+                }),
+            );
+        })
+        .unwrap();
+
+    let token_data = match crate::users::decode_token(auth_header) {
+        Ok(data) => data,
+        Err(_) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(CreateProjectResponse {
+                    message: "Invalid token".to_string(),
+                }),
+            );
+        }
+    };
+
+    let owner_id: Uuid = Uuid::parse_str(&token_data.sub).unwrap();
+
+    // Check if project exists in DB
+    let existing = sqlx::query("SELECT id FROM projects WHERE name = $1")
+        .bind(&payload.name)
+        .fetch_optional(&combined.db)
+        .await;
+    if existing.map(|opt| opt.is_some()).unwrap_or(false) {
         return (
             StatusCode::CONFLICT,
             Json(CreateProjectResponse {
                 message: "Project already exists".to_string(),
+            }),
+        );
+    }
+
+    // Insert into DB
+    let project_id =
+        match sqlx::query("INSERT INTO projects (name, owner_id) VALUES ($1, $2) RETURNING id")
+            .bind(&payload.name)
+            .bind(&owner_id)
+            .fetch_one(&combined.db)
+            .await
+        {
+            Ok(row) => row.get::<Uuid, _>("id"),
+            Err(_) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(CreateProjectResponse {
+                        message: "Failed to create project in DB".to_string(),
+                    }),
+                );
+            }
+        };
+
+    // Insert admin permission for owner
+    if sqlx::query("INSERT INTO permissions (user_id, project, access) VALUES ($1, $2, 'admin')")
+        .bind(&owner_id)
+        .bind(&payload.name)
+        .execute(&combined.db)
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(CreateProjectResponse {
+                message: "Failed to set owner permission".to_string(),
             }),
         );
     }
@@ -366,6 +407,7 @@ async fn create_project_handler(
     // Load the new project state
     match load_project_state(&project_dir) {
         Ok(app_state) => {
+            let mut projects = combined.projects.lock().await;
             projects.insert(payload.name, app_state);
             (
                 StatusCode::CREATED,
@@ -381,6 +423,73 @@ async fn create_project_handler(
             }),
         ),
     }
+}
+
+// DELETE /projects/{name}
+async fn delete_project_handler(
+    State(combined): State<CombinedState>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+) -> StatusCode {
+    // Authenticate user
+    let auth_header = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .ok_or(StatusCode::UNAUTHORIZED)
+        .unwrap();
+
+    let token_data = match crate::users::decode_token(auth_header) {
+        Ok(data) => data,
+        Err(_) => return StatusCode::UNAUTHORIZED,
+    };
+
+    let user_id: Uuid = Uuid::parse_str(&token_data.sub).unwrap();
+
+    // Check if user is owner or global admin
+    let project_owner = sqlx::query("SELECT owner_id FROM projects WHERE name = $1")
+        .bind(&name)
+        .fetch_optional(&combined.db)
+        .await
+        .unwrap_or(None);
+
+    let is_owner = project_owner
+        .as_ref()
+        .map(|row| row.get::<Uuid, _>("owner_id") == user_id)
+        .unwrap_or(false);
+    let is_admin = sqlx::query("SELECT role FROM users WHERE id = $1")
+        .bind(&user_id)
+        .fetch_optional(&combined.db)
+        .await
+        .unwrap_or(None)
+        .map(|row| row.get::<String, _>("role") == "admin")
+        .unwrap_or(false);
+
+    if !is_owner && !is_admin {
+        return StatusCode::FORBIDDEN;
+    }
+
+    // Delete from DB (cascade permissions)
+    if sqlx::query("DELETE FROM projects WHERE name = $1")
+        .bind(&name)
+        .execute(&combined.db)
+        .await
+        .is_err()
+    {
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    }
+
+    // Delete filesystem directory
+    let project_dir = PathBuf::from("server/examples").join(&name);
+    if let Err(_) = fs::remove_dir_all(&project_dir) {
+        // Log error but don't fail
+    }
+
+    // Remove from in-memory state
+    let mut projects = combined.projects.lock().await;
+    projects.remove(&name);
+
+    StatusCode::NO_CONTENT
 }
 
 // --- Artifacts Module ---
