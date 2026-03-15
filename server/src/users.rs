@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use protocol::{User, Permission};
+use protocol::{Permission, User};
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct UserState {
@@ -51,9 +51,7 @@ pub fn save_user_state(state: &UserState) -> Result<(), String> {
 
 // Handlers
 
-pub async fn get_users_handler(
-    State(state): State<SharedUserState>,
-) -> Json<Vec<User>> {
+pub async fn get_users_handler(State(state): State<SharedUserState>) -> Json<Vec<User>> {
     let s = state.lock().await;
     Json(s.users.clone())
 }
@@ -116,17 +114,18 @@ pub async fn set_permission_handler(
     Json(payload): Json<SetPermissionRequest>,
 ) -> (StatusCode, Json<Permission>) {
     let mut s = state.lock().await;
-    
+
     // Remove existing permission for this user and project if any
-    s.permissions.retain(|p| !(p.user_id == payload.user_id && p.project == payload.project));
-    
+    s.permissions
+        .retain(|p| !(p.user_id == payload.user_id && p.project == payload.project));
+
     let permission = Permission {
         user_id: payload.user_id,
         project: payload.project,
         access: payload.access,
     };
     s.permissions.push(permission.clone());
-    
+
     if let Err(e) = save_user_state(&s) {
         eprintln!("Failed to save permissions: {}", e);
     }

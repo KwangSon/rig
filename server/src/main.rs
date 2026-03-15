@@ -1,9 +1,9 @@
 use axum::{
     Router,
-    extract::State,
-    http::{StatusCode, Method},
+    extract::{FromRef, State},
+    http::{Method, StatusCode},
     response::Json,
-    routing::{get, post, delete},
+    routing::{delete, get, post},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -12,10 +12,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
-use tower_http::cors::{CorsLayer, Any};
 
-use protocol::{Artifact, Revision};
+use protocol::Artifact;
 
 // --- App State ---
 
@@ -66,6 +66,24 @@ pub struct LockResponse {
 
 pub type SharedState = Arc<Mutex<HashMap<String, AppState>>>;
 
+#[derive(Clone)]
+pub struct CombinedState {
+    pub projects: SharedState,
+    pub users: users::SharedUserState,
+}
+
+impl FromRef<CombinedState> for SharedState {
+    fn from_ref(state: &CombinedState) -> Self {
+        state.projects.clone()
+    }
+}
+
+impl FromRef<CombinedState> for users::SharedUserState {
+    fn from_ref(state: &CombinedState) -> Self {
+        state.users.clone()
+    }
+}
+
 // --- Main ---
 
 #[tokio::main]
@@ -99,6 +117,11 @@ async fn main() {
     let state: SharedState = Arc::new(Mutex::new(projects));
     let user_state: users::SharedUserState = Arc::new(Mutex::new(users::load_user_state()));
 
+    let combined_state = CombinedState {
+        projects: state,
+        users: user_state,
+    };
+
     let cors = CorsLayer::new()
         .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::PUT])
         .allow_origin(Any)
@@ -108,9 +131,15 @@ async fn main() {
         .route("/health", get(health_handler))
         .route("/projects", get(get_projects_handler))
         .route("/create_project", post(create_project_handler))
-        .route("/users", get(users::get_users_handler).post(users::create_user_handler))
+        .route(
+            "/users",
+            get(users::get_users_handler).post(users::create_user_handler),
+        )
         .route("/users/{id}", delete(users::delete_user_handler))
-        .route("/permissions", get(users::get_permissions_handler).post(users::set_permission_handler))
+        .route(
+            "/permissions",
+            get(users::get_permissions_handler).post(users::set_permission_handler),
+        )
         .route("/{project}/index.json", get(artifacts::get_index_handler))
         .route(
             "/{project}/artifacts",
@@ -135,8 +164,7 @@ async fn main() {
             "/{project}/artifacts/{id}/{filename}",
             get(artifacts::download_artifact_handler),
         )
-        .with_state(state)
-        .layer(axum::extract::State(user_state))
+        .with_state(combined_state)
         .layer(cors)
         .fallback_service(ServeDir::new(&base_dir));
 
@@ -196,9 +224,7 @@ async fn health_handler() -> Json<HealthResponse> {
 }
 
 // GET /projects
-async fn get_projects_handler(
-    State(state): State<SharedState>,
-) -> Json<Vec<String>> {
+async fn get_projects_handler(State(state): State<SharedState>) -> Json<Vec<String>> {
     let projects = state.lock().await;
     Json(projects.keys().cloned().collect())
 }

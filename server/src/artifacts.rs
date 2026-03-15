@@ -313,6 +313,7 @@ pub async fn lock_handler(
 pub async fn unlock_handler(
     Path((project, id)): Path<(String, String)>,
     State(state): State<SharedState>,
+    State(user_state): State<crate::users::SharedUserState>,
     Json(payload): Json<UnlockRequest>,
 ) -> (StatusCode, Json<LockResponse>) {
     let mut projects = state.lock().await;
@@ -331,7 +332,39 @@ pub async fn unlock_handler(
 
     if let Some(artifact) = app_state.artifacts.get_mut(&id) {
         if let Some(ref locked_by) = artifact.locked_by {
-            if locked_by == &payload.user || payload.force {
+            let mut allow_unlock = false;
+
+            if locked_by == &payload.user {
+                allow_unlock = true;
+            } else if payload.force {
+                // Check if user has force-unlock permissions (admin)
+                let users_data = user_state.lock().await;
+                let user_id = users_data
+                    .users
+                    .iter()
+                    .find(|u| u.name == payload.user || u.id == payload.user)
+                    .map(|u| u.id.clone());
+
+                if let Some(uid) = user_id {
+                    let is_global_admin = users_data
+                        .users
+                        .iter()
+                        .find(|u| u.id == uid)
+                        .map(|u| u.role == "admin")
+                        .unwrap_or(false);
+
+                    let has_project_admin = users_data
+                        .permissions
+                        .iter()
+                        .any(|p| p.user_id == uid && p.project == project && p.access == "admin");
+
+                    if is_global_admin || has_project_admin {
+                        allow_unlock = true;
+                    }
+                }
+            }
+
+            if allow_unlock {
                 artifact.locked_by = None;
                 // Persist lock state
                 if let Err(e) = persist_index(app_state) {
