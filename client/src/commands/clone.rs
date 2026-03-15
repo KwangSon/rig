@@ -1,6 +1,6 @@
+use protocol::{Artifact, Commit, IndexFile, Revision};
 use std::fs;
 use std::path::PathBuf;
-use protocol::{Artifact, Commit, IndexFile, Revision};
 
 pub async fn run(url: &str, path: &Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
     let trimmed_url = url.trim_end_matches('/');

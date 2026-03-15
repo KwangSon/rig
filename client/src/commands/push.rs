@@ -23,11 +23,15 @@ pub async fn run(message: Option<String>) -> Result<(), Box<dyn std::error::Erro
             .map_err(|e| format!("Failed to read local index.json: {}", e))?;
         let local_index: IndexFile = serde_json::from_str(&index_content)
             .map_err(|e| format!("Failed to parse local index.json: {}", e))?;
-        local_index
-            .commits
-            .last()
-            .map(|c| c.message.clone())
-            .unwrap_or_default()
+        if local_index.latest_commit.is_empty() {
+            "".to_string()
+        } else {
+            local_index
+                .commits
+                .get(&local_index.latest_commit)
+                .map(|c| c.message.clone())
+                .unwrap_or_default()
+        }
     };
 
     println!("Running rig push with message: '{}'", message);
@@ -45,7 +49,10 @@ pub async fn run(message: Option<String>) -> Result<(), Box<dyn std::error::Erro
     let mut local_index: IndexFile = serde_json::from_str(&local_index_content)
         .map_err(|e| format!("Failed to parse local index.json: {}", e))?;
 
-    let server_url = &local_index.server_url;
+    let server_url = local_index
+        .server_url
+        .as_ref()
+        .ok_or("Server URL not configured")?;
     let client = reqwest::Client::new();
 
     // Check if project exists on server, create if not
@@ -113,7 +120,9 @@ pub async fn run(message: Option<String>) -> Result<(), Box<dyn std::error::Erro
         // Update local index
         artifact_details.latest = new_rev;
         let hash = protocol::Revision::new(new_rev, &file_data).hash;
-        artifact_details.revisions.push(Revision { rev: new_rev, hash });
+        artifact_details
+            .revisions
+            .push(Revision { rev: new_rev, hash });
 
         // Unlock on server
         let unlock_url = format!(

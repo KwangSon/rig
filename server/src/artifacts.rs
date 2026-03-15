@@ -98,12 +98,15 @@ pub async fn create_artifact_handler(
         );
     }
 
-    app_state.artifacts.insert(payload.path.clone(), Artifact {
-        path: payload.path.clone(),
-        latest: 1,
-        locked_by: None,
-        revisions: vec![Revision::new(1, &bytes)],
-    });
+    app_state.artifacts.insert(
+        payload.path.clone(),
+        Artifact {
+            path: payload.path.clone(),
+            latest: 1,
+            locked_by: None,
+            revisions: vec![Revision::new(1, &bytes)],
+        },
+    );
 
     // Persist index.json (best-effort)
     if let Err(e) = persist_index(app_state) {
@@ -236,9 +239,7 @@ pub async fn get_revisions_handler(
                 artifact
                     .revisions
                     .iter()
-                    .map(|r| RevisionShortResponse {
-                        revision: r.rev,
-                    })
+                    .map(|r| RevisionShortResponse { revision: r.rev })
                     .collect(),
             );
         }
@@ -420,10 +421,7 @@ fn persist_index(app_state: &AppState) -> Result<(), String> {
             .iter()
             .map(|r| {
                 let mut m = serde_json::Map::new();
-                m.insert(
-                    "rev".to_string(),
-                    serde_json::Value::Number(r.rev.into()),
-                );
+                m.insert("rev".to_string(), serde_json::Value::Number(r.rev.into()));
                 m.insert(
                     "hash".to_string(),
                     serde_json::Value::String(r.hash.clone()),

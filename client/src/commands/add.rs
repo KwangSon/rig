@@ -40,7 +40,10 @@ pub async fn run(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 
     // Fetch remote index
     let client = reqwest::Client::new();
-    let server_url = &local_index.server_url;
+    let server_url = local_index
+        .server_url
+        .as_ref()
+        .ok_or("Server URL not configured")?;
     let remote_index_url = format!("{}/{}/index.json", server_url, project);
     println!("-> Fetching latest metadata from {}...", remote_index_url);
     let remote_index_resp = client.get(&remote_index_url).send().await?;
@@ -124,7 +127,10 @@ pub async fn run(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
                 path: artifact_name.clone(),
                 latest: 1,
                 locked_by: None,
-                revisions: vec![Revision { rev: 1, hash: "".to_string() }],
+                revisions: vec![Revision {
+                    rev: 1,
+                    hash: "".to_string(),
+                }],
             },
         );
     }

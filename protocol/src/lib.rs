@@ -27,7 +27,9 @@ pub struct Artifact {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Commit {
-    pub id: u32,
+    pub hash: String,
+    pub parent: Option<String>,
+    pub message: String,
     pub artifacts: HashMap<String, u32>,
 }
 
@@ -35,7 +37,7 @@ pub struct Commit {
 pub struct IndexFile {
     pub project: String,
     pub server_url: Option<String>,
-    pub latest_commit: u32,
+    pub latest_commit: String,
     pub artifacts: HashMap<String, Artifact>,
-    pub commits: Vec<Commit>,
+    pub commits: HashMap<String, Commit>,
 }

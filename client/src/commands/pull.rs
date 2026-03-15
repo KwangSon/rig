@@ -1,7 +1,7 @@
+use protocol::{Artifact, Commit, IndexFile, Revision};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use protocol::{Artifact, Commit, IndexFile, Revision};
 
 pub async fn run(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     println!("Running rig pull for path: {:?}", path);

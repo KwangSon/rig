@@ -144,12 +144,15 @@ fn load_project_state(project_dir: &Path) -> Result<AppState, String> {
                     hash: r["hash"].as_str().unwrap_or("").to_string(),
                 })
                 .collect();
-            artifacts.insert(k.clone(), Artifact {
-                path: path.to_string(),
-                latest,
-                locked_by,
-                revisions,
-            });
+            artifacts.insert(
+                k.clone(),
+                Artifact {
+                    path: path.to_string(),
+                    latest,
+                    locked_by,
+                    revisions,
+                },
+            );
         }
     }
 

@@ -64,37 +64,40 @@
       ]
     }
   },
-  "commits": [
-    {
+  "commits": {
+    "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d": {
       "artifacts": {
         "docs_guide": 1,
         "readme": 1,
         "src_main": 1
       },
-      "id": 1,
-      "message": "initial import"
+      "hash": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d",
+      "message": "initial import",
+      "parent": null
     },
-    {
+    "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d": {
       "artifacts": {
         "config": 1,
         "docs_guide": 1,
         "readme": 1,
         "src_main": 1
       },
-      "id": 2,
-      "message": "add config"
+      "hash": "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d",
+      "message": "add config",
+      "parent": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d"
     },
-    {
+    "d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d": {
       "artifacts": {
         "config": 1,
         "docs_guide": 1,
         "readme": 1,
         "src_main": 2
       },
-      "id": 3,
-      "message": "fix typo in main"
+      "hash": "d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d",
+      "message": "fix typo in main",
+      "parent": "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d"
     },
-    {
+    "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d": {
       "artifacts": {
         "binary": 1,
         "config": 1,
@@ -102,10 +105,11 @@
         "readme": 1,
         "src_main": 2
       },
-      "id": 4,
-      "message": "add binary tool"
+      "hash": "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d",
+      "message": "add binary tool",
+      "parent": "d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d"
     },
-    {
+    "d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d": {
       "artifacts": {
         "binary": 1,
         "config": 1,
@@ -113,10 +117,12 @@
         "readme": 2,
         "src_main": 2
       },
-      "id": 5,
-      "message": "update README"
+      "hash": "d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d",
+      "message": "update README",
+      "parent": "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d"
     }
-  ],
-  "latest_commit": 5,
-  "project": "ComplexProject"
+  },
+  "latest_commit": "d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d",
+  "project": "ComplexProject",
+  "server_url": null
 }
