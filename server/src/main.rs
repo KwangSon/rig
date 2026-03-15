@@ -114,8 +114,12 @@ async fn main() {
                 .get(artifacts::get_lock_handler),
         )
         .route("/{project}/push", post(artifacts::push_handler))
+        .route(
+            "/{project}/artifacts/{id}/{filename}",
+            get(artifacts::download_artifact_handler),
+        )
         .with_state(state)
-        .fallback_service(ServeDir::new(base_dir));
+        .fallback_service(ServeDir::new(&base_dir));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
         .await

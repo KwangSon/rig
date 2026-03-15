@@ -34,7 +34,11 @@ pub async fn run(message: &str) -> Result<(), Box<dyn std::error::Error>> {
         .map(|(k, v)| (k.clone(), v.latest))
         .collect();
 
-    // Generate hash from parent, message, and artifacts
+    // Generate hash from parent, message, author, and artifacts
+    let author = local_index
+        .username
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
     let mut hasher = Sha1::new();
     hasher.update(
         current_parent
@@ -43,6 +47,7 @@ pub async fn run(message: &str) -> Result<(), Box<dyn std::error::Error>> {
             .as_bytes(),
     );
     hasher.update(message.as_bytes());
+    hasher.update(author.as_bytes());
     hasher.update(serde_json::to_string(&artifacts)?.as_bytes());
     let hash = format!("{:x}", hasher.finalize());
 
@@ -50,6 +55,7 @@ pub async fn run(message: &str) -> Result<(), Box<dyn std::error::Error>> {
         hash: hash.clone(),
         parent: current_parent,
         message: message.to_string(),
+        author,
         artifacts,
     };
 

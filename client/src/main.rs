@@ -177,13 +177,15 @@ async fn lock_artifact(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let artifact_id = resolve_artifact_id(&index, &path_str)
         .ok_or_else(|| format!("Artifact '{}' not found", path_str))?;
 
+    let username = index.username.as_deref().unwrap_or("unknown");
+
     // Send POST to server (lock endpoint is namespaced by project)
     let client = reqwest::Client::new();
     let url = format!(
         "http://localhost:3000/{}/artifacts/{}/lock",
         index.project, artifact_id
     );
-    let body = serde_json::json!({"user": "alice"});
+    let body = serde_json::json!({"user": username});
     let resp = client.post(&url).json(&body).send().await?;
     if !resp.status().is_success() {
         return Err(format!("Lock request failed: {}", resp.status()).into());

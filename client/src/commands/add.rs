@@ -93,10 +93,12 @@ pub async fn run(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         let locked = lock_json["locked"].as_bool().unwrap_or(false);
         let locked_by = lock_json["user"].as_str().unwrap_or("");
 
-        if !locked || locked_by != "alice" {
+        let current_user = local_index.username.as_deref().unwrap_or("unknown");
+
+        if !locked || locked_by != current_user {
             return Err(format!(
-                "Artifact '{}' must be locked by you before adding (locked_by={:?})",
-                artifact_name, locked_by
+                "Artifact '{}' must be locked by you before adding (locked_by={:?}, you={:?})",
+                artifact_name, locked_by, current_user
             )
             .into());
         }

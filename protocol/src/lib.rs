@@ -30,6 +30,7 @@ pub struct Commit {
     pub hash: String,
     pub parent: Option<String>,
     pub message: String,
+    pub author: String,
     pub artifacts: HashMap<String, u32>,
 }
 
@@ -37,6 +38,7 @@ pub struct Commit {
 pub struct IndexFile {
     pub project: String,
     pub server_url: Option<String>,
+    pub username: Option<String>,
     pub latest_commit: String,
     pub artifacts: HashMap<String, Artifact>,
     pub commits: HashMap<String, Commit>,

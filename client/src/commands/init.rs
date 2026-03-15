@@ -29,6 +29,13 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         server_url.to_string()
     };
 
+    // Prompt for username
+    print!("Enter your username (e.g. Jone <jone@tt.com>): ");
+    io::stdout().flush()?;
+    let mut username = String::new();
+    io::stdin().read_line(&mut username)?;
+    let username = username.trim().to_string();
+
     // Try to create the project on the server first
     let client = reqwest::Client::new();
     let create_url = format!("{}/create_project", server_url);
@@ -76,10 +83,11 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
     // Validate and write
-    let _: IndexFile = serde_json::from_str(&remote_index_content)
+    let mut local_index: IndexFile = serde_json::from_str(&remote_index_content)
         .map_err(|e| format!("Server index.json is invalid: {}", e))?;
+    local_index.username = Some(username);
     let index_path = rig_dir.join("index.json");
-    fs::write(&index_path, &remote_index_content)?;
+    fs::write(&index_path, serde_json::to_string_pretty(&local_index)?)?;
     println!("Created .rig directory and downloaded index.json from server");
     Ok(())
 }

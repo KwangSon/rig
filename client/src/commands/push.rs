@@ -8,6 +8,7 @@ use protocol::{Commit, IndexFile};
 #[derive(Serialize)]
 struct PushRequest {
     message: String,
+    username: String,
     updated_artifacts: HashMap<String, String>,
 }
 
@@ -79,6 +80,10 @@ pub async fn run(message: Option<String>) -> Result<(), Box<dyn std::error::Erro
     let push_url = format!("{}/{}/push", server_url, local_index.project);
     let payload = PushRequest {
         message: message.clone(),
+        username: local_index
+            .username
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string()),
         updated_artifacts,
     };
 

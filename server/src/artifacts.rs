@@ -448,6 +448,7 @@ fn persist_index(app_state: &AppState) -> Result<(), String> {
 #[derive(Deserialize)]
 pub struct PushRequest {
     pub message: String,
+    pub username: String,
     pub updated_artifacts: std::collections::HashMap<String, String>,
 }
 
@@ -520,11 +521,12 @@ pub async fn push_handler(
         Some(latest_commit_hash.clone())
     };
 
-    // Hash the commit: SHA1(parent + message + artifacts_json)
+    // Hash the commit: SHA1(parent + message + author + artifacts_json)
     let mut hasher = sha1::Sha1::new();
     use sha1::Digest;
     hasher.update(parent.as_deref().unwrap_or("").as_bytes());
     hasher.update(payload.message.as_bytes());
+    hasher.update(payload.username.as_bytes());
     hasher.update(serde_json::to_string(&commit_artifacts).unwrap().as_bytes());
     let new_hash = format!("{:x}", hasher.finalize());
 
@@ -532,6 +534,7 @@ pub async fn push_handler(
         hash: new_hash.clone(),
         parent,
         message: payload.message,
+        author: payload.username,
         artifacts: commit_artifacts,
     };
 
@@ -541,6 +544,7 @@ pub async fn push_handler(
     let mut full_index: protocol::IndexFile = protocol::IndexFile {
         project: project.clone(),
         server_url: None, // Will be filled from previous index if exists
+        username: None,
         latest_commit: new_hash.clone(),
         artifacts: app_state.artifacts.clone(),
         commits: commits_map,
@@ -562,4 +566,24 @@ pub async fn push_handler(
         StatusCode::OK,
         Json(serde_json::to_value(new_commit).unwrap()),
     )
+}
+
+pub async fn download_artifact_handler(
+    Path((project, id, filename)): Path<(String, String, String)>,
+    State(state): State<SharedState>,
+) -> (StatusCode, Vec<u8>) {
+    let projects = state.lock().await;
+    let app_state = match projects.get(&project) {
+        Some(s) => s,
+        None => return (StatusCode::NOT_FOUND, vec![]),
+    };
+    let file_path = app_state
+        .project_dir
+        .join("artifacts")
+        .join(id)
+        .join(filename);
+    match fs::read(file_path) {
+        Ok(bytes) => (StatusCode::OK, bytes),
+        Err(_) => (StatusCode::NOT_FOUND, vec![]),
+    }
 }

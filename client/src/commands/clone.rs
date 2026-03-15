@@ -59,9 +59,17 @@ pub async fn run(url: &str, path: &Option<PathBuf>) -> Result<(), Box<dyn std::e
     let metadata = meta_resp.text().await?;
     println!("   Metadata fetched successfully.");
 
-    // Parse the metadata
-    let index: IndexFile =
+    let mut index: IndexFile =
         serde_json::from_str(&metadata).map_err(|e| format!("Failed to parse metadata: {}", e))?;
+
+    // 2.5 Prompt for username
+    use std::io::{self, Write};
+    print!("Enter your username (e.g. Jone <jone@tt.com>): ");
+    io::stdout().flush()?;
+    let mut username = String::new();
+    io::stdin().read_line(&mut username)?;
+    let username = username.trim().to_string();
+    index.username = Some(username);
 
     // 3. Create .rig folder and write index.json
     let clone_path = match path {
@@ -82,7 +90,7 @@ pub async fn run(url: &str, path: &Option<PathBuf>) -> Result<(), Box<dyn std::e
     fs::create_dir_all(&rig_path)?;
 
     let index_path = rig_path.join("index.json");
-    fs::write(&index_path, metadata)?;
+    fs::write(&index_path, serde_json::to_string_pretty(&index)?)?;
 
     // 4. Create empty read-only files for each artifact
     for artifact in index.artifacts.values() {
