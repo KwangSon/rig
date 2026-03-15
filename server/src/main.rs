@@ -1,9 +1,9 @@
 use axum::{
     Router,
     extract::State,
-    http::StatusCode,
+    http::{StatusCode, Method},
     response::Json,
-    routing::{get, post},
+    routing::{get, post, delete},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tower_http::services::ServeDir;
+use tower_http::cors::{CorsLayer, Any};
 
 use protocol::{Artifact, Revision};
 
@@ -96,10 +97,20 @@ async fn main() {
     }
 
     let state: SharedState = Arc::new(Mutex::new(projects));
+    let user_state: users::SharedUserState = Arc::new(Mutex::new(users::load_user_state()));
+
+    let cors = CorsLayer::new()
+        .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::PUT])
+        .allow_origin(Any)
+        .allow_headers(Any);
 
     let app = Router::new()
         .route("/health", get(health_handler))
+        .route("/projects", get(get_projects_handler))
         .route("/create_project", post(create_project_handler))
+        .route("/users", get(users::get_users_handler).post(users::create_user_handler))
+        .route("/users/{id}", delete(users::delete_user_handler))
+        .route("/permissions", get(users::get_permissions_handler).post(users::set_permission_handler))
         .route("/{project}/index.json", get(artifacts::get_index_handler))
         .route(
             "/{project}/artifacts",
@@ -125,6 +136,8 @@ async fn main() {
             get(artifacts::download_artifact_handler),
         )
         .with_state(state)
+        .layer(axum::extract::State(user_state))
+        .layer(cors)
         .fallback_service(ServeDir::new(&base_dir));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
@@ -146,18 +159,18 @@ fn load_project_state(project_dir: &Path) -> Result<AppState, String> {
             let path = v["path"].as_str().unwrap_or("");
             let latest = v["latest"].as_u64().unwrap_or(0) as u32;
             let locked_by = v["locked_by"].as_str().map(|s| s.to_string());
-            let revisions: Vec<Revision> = v["revisions"]
+            let revisions: Vec<protocol::Revision> = v["revisions"]
                 .as_array()
                 .unwrap_or(&vec![])
                 .iter()
-                .map(|r| Revision {
+                .map(|r| protocol::Revision {
                     rev: r["rev"].as_u64().unwrap_or(0) as u32,
                     hash: r["hash"].as_str().unwrap_or("").to_string(),
                 })
                 .collect();
             artifacts.insert(
                 k.clone(),
-                Artifact {
+                protocol::Artifact {
                     path: path.to_string(),
                     latest,
                     locked_by,
@@ -180,6 +193,14 @@ async fn health_handler() -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok".to_string(),
     })
+}
+
+// GET /projects
+async fn get_projects_handler(
+    State(state): State<SharedState>,
+) -> Json<Vec<String>> {
+    let projects = state.lock().await;
+    Json(projects.keys().cloned().collect())
 }
 
 // POST /create_project
@@ -254,3 +275,4 @@ async fn create_project_handler(
 // --- Artifacts Module ---
 
 mod artifacts;
+mod users;

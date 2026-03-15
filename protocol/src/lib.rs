@@ -3,6 +3,21 @@ use sha1::{Digest, Sha1};
 use std::collections::HashMap;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct User {
+    pub id: String,
+    pub name: String,
+    pub email: String,
+    pub role: String, // "admin", "user"
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Permission {
+    pub user_id: String,
+    pub project: String,
+    pub access: String, // "read", "write", "admin"
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Revision {
     pub rev: u32,
     pub hash: String,
