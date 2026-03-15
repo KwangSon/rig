@@ -75,6 +75,9 @@ enum Commands {
     Unlock {
         /// The path to the artifact to unlock
         path: PathBuf,
+        /// Force unlock even if locked by another user
+        #[arg(short, long)]
+        force: bool,
     },
 }
 
@@ -149,8 +152,8 @@ async fn main() {
                 std::process::exit(1);
             }
         }
-        Commands::Unlock { path } => {
-            if let Err(e) = unlock_artifact(path).await {
+        Commands::Unlock { path, force } => {
+            if let Err(e) = unlock_artifact(path, *force).await {
                 eprintln!("[error] Failed to unlock: {}", e);
                 std::process::exit(1);
             }
@@ -211,7 +214,7 @@ async fn lock_artifact(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn unlock_artifact(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+async fn unlock_artifact(path: &Path, force: bool) -> Result<(), Box<dyn std::error::Error>> {
     println!("Unlocking artifact: {}", path.display());
 
     // Get current dir, check .rig
@@ -230,14 +233,25 @@ async fn unlock_artifact(path: &Path) -> Result<(), Box<dyn std::error::Error>> 
     let artifact_id = resolve_artifact_id(&index, &path_str)
         .ok_or_else(|| format!("Artifact '{}' not found", path_str))?;
 
+    let username = index.username.as_deref().unwrap_or("unknown");
+
     // Send DELETE to server (unlock endpoint is namespaced by project)
     let client = reqwest::Client::new();
     let url = format!(
         "http://localhost:3000/{}/artifacts/{}/lock",
         index.project, artifact_id
     );
-    let resp = client.delete(&url).send().await?;
+    let body = serde_json::json!({
+        "user": username,
+        "force": force
+    });
+    let resp = client.delete(&url).json(&body).send().await?;
     if !resp.status().is_success() {
+        if resp.status() == reqwest::StatusCode::FORBIDDEN {
+            let resp_json: serde_json::Value = resp.json().await?;
+            let locked_by = resp_json["user"].as_str().unwrap_or("another user");
+            return Err(format!("Unlock denied: artifact is locked by {}", locked_by).into());
+        }
         return Err(format!("Unlock request failed: {}", resp.status()).into());
     }
 

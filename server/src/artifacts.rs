@@ -7,7 +7,7 @@ use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Serialize};
 use std::fs;
 
-use crate::{AppState, LockRequest, LockResponse, SharedState};
+use crate::{AppState, LockRequest, LockResponse, SharedState, UnlockRequest};
 use protocol::{Artifact, Revision};
 
 #[derive(Deserialize)]
@@ -313,6 +313,7 @@ pub async fn lock_handler(
 pub async fn unlock_handler(
     Path((project, id)): Path<(String, String)>,
     State(state): State<SharedState>,
+    Json(payload): Json<UnlockRequest>,
 ) -> (StatusCode, Json<LockResponse>) {
     let mut projects = state.lock().await;
     let app_state = match projects.get_mut(&project) {
@@ -329,18 +330,39 @@ pub async fn unlock_handler(
     };
 
     if let Some(artifact) = app_state.artifacts.get_mut(&id) {
-        artifact.locked_by = None;
-        // Persist lock state
-        if let Err(e) = persist_index(app_state) {
-            eprintln!("Failed to persist lock state: {}", e);
+        if let Some(ref locked_by) = artifact.locked_by {
+            if locked_by == &payload.user || payload.force {
+                artifact.locked_by = None;
+                // Persist lock state
+                if let Err(e) = persist_index(app_state) {
+                    eprintln!("Failed to persist lock state: {}", e);
+                }
+                (
+                    StatusCode::OK,
+                    Json(LockResponse {
+                        locked: false,
+                        user: None,
+                    }),
+                )
+            } else {
+                (
+                    StatusCode::FORBIDDEN,
+                    Json(LockResponse {
+                        locked: true,
+                        user: Some(locked_by.clone()),
+                    }),
+                )
+            }
+        } else {
+            // Already unlocked
+            (
+                StatusCode::OK,
+                Json(LockResponse {
+                    locked: false,
+                    user: None,
+                }),
+            )
         }
-        (
-            StatusCode::OK,
-            Json(LockResponse {
-                locked: false,
-                user: None,
-            }),
-        )
     } else {
         (
             StatusCode::NOT_FOUND,

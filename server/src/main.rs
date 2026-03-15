@@ -38,7 +38,13 @@ struct CreateProjectResponse {
 
 #[derive(Deserialize)]
 pub struct LockRequest {
-    user: String,
+    pub user: String,
+}
+
+#[derive(Deserialize)]
+pub struct UnlockRequest {
+    pub user: String,
+    pub force: bool,
 }
 
 // --- Response Payloads ---

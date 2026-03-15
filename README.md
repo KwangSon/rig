@@ -18,7 +18,7 @@ rig add <path>                  # Add changes to artifact
 rig commit -m "message"         # Create local commit
 rig push                        # Push changes and commits to server
 
-rig unlock <path>               # Unlock artifact (makes read-only)
+rig unlock <path> [--force]      # Unlock artifact (makes read-only)
 ```
 
 ## Workflow
