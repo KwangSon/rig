@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
 mod commands;
+mod utils;
 use protocol::IndexFile;
 
 fn resolve_artifact_id(index: &IndexFile, query: &str) -> Option<String> {
@@ -24,8 +25,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Initializes a new rig repository
-    Init,
     /// Clones a rig repository
     Clone {
         /// The URL of the repository to clone
@@ -79,6 +78,37 @@ enum Commands {
         #[arg(short, long)]
         force: bool,
     },
+    /// Manages git modules (snapshot of external git repositories)
+    Gitmodule {
+        #[command(subcommand)]
+        subcommand: GitModuleCommands,
+    },
+}
+
+#[derive(clap::Subcommand)]
+pub enum GitModuleCommands {
+    /// Adds a new git module
+    Add {
+        /// URL of the git repository
+        url: String,
+        /// Path where the module should be placed
+        path: PathBuf,
+        /// Specific commit hash (optional, defaults to HEAD of remote)
+        #[arg(short, long)]
+        commit: Option<String>,
+    },
+    /// Updates an existing git module to a specific commit
+    Update {
+        /// Path of the module to update
+        path: PathBuf,
+        /// Specific commit hash
+        #[arg(short, long)]
+        commit: String,
+    },
+    /// Lists all git modules and their configured commits
+    Status,
+    /// Synchronizes local git modules (clones and checks out configured commits)
+    Sync,
 }
 
 #[tokio::main]
@@ -86,12 +116,6 @@ async fn main() {
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::Init => {
-            if let Err(e) = commands::init::run().await {
-                eprintln!("[error] Failed to initialize repository: {}", e);
-                std::process::exit(1);
-            }
-        }
         Commands::Clone { url, path } => {
             if let Err(e) = commands::clone::run(url, path).await {
                 eprintln!("[error] Failed to clone repository: {}", e);
@@ -155,6 +179,12 @@ async fn main() {
         Commands::Unlock { path, force } => {
             if let Err(e) = unlock_artifact(path, *force).await {
                 eprintln!("[error] Failed to unlock: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Commands::Gitmodule { subcommand } => {
+            if let Err(e) = commands::gitmodule::run(subcommand).await {
+                eprintln!("[error] Gitmodule command failed: {}", e);
                 std::process::exit(1);
             }
         }

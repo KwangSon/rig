@@ -50,11 +50,20 @@ pub struct Commit {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct GitModule {
+    pub path: String,
+    pub url: String,
+    pub commit: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct IndexFile {
     pub project: String,
     pub server_url: Option<String>,
     pub username: Option<String>,
     pub latest_commit: String,
     pub artifacts: HashMap<String, Artifact>,
+    #[serde(default)]
+    pub git_modules: HashMap<String, GitModule>,
     pub commits: HashMap<String, Commit>,
 }

@@ -22,7 +22,8 @@ use protocol::Artifact;
 #[derive(Clone)]
 pub struct AppState {
     pub project_dir: PathBuf,
-    pub artifacts: HashMap<String, Artifact>,
+    pub artifacts: HashMap<String, protocol::Artifact>,
+    pub git_modules: HashMap<String, protocol::GitModule>,
 }
 
 // --- Request Payloads ---
@@ -161,6 +162,10 @@ async fn main() {
         )
         .route("/{project}/push", post(artifacts::push_handler))
         .route(
+            "/{project}/gitmodules/{*path}",
+            routing::put(artifacts::update_gitmodule_handler),
+        )
+        .route(
             "/{project}/artifacts/{id}/{filename}",
             get(artifacts::download_artifact_handler),
         )
@@ -208,9 +213,24 @@ fn load_project_state(project_dir: &Path) -> Result<AppState, String> {
         }
     }
 
+    let mut git_modules = HashMap::new();
+    if let Some(modules_obj) = index["git_modules"].as_object() {
+        for (k, v) in modules_obj {
+            git_modules.insert(
+                k.clone(),
+                protocol::GitModule {
+                    path: v["path"].as_str().unwrap_or("").to_string(),
+                    url: v["url"].as_str().unwrap_or("").to_string(),
+                    commit: v["commit"].as_str().unwrap_or("").to_string(),
+                },
+            );
+        }
+    }
+
     Ok(AppState {
         project_dir: project_dir.to_path_buf(),
         artifacts,
+        git_modules,
     })
 }
 

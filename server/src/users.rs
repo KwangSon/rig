@@ -29,12 +29,11 @@ pub fn get_users_file_path() -> PathBuf {
 
 pub fn load_user_state() -> UserState {
     let path = get_users_file_path();
-    if path.exists() {
-        if let Ok(content) = fs::read_to_string(&path) {
-            if let Ok(state) = serde_json::from_str(&content) {
-                return state;
-            }
-        }
+    if path.exists()
+        && let Ok(content) = fs::read_to_string(&path)
+        && let Ok(state) = serde_json::from_str(&content)
+    {
+        return state;
     }
     UserState {
         users: vec![],

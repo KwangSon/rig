@@ -9,6 +9,7 @@ export default function Home() {
   const [users, setUsers] = useState<any[]>([]);
   const [permissions, setPermissions] = useState<any[]>([]);
 
+  const [newProjectName, setNewProjectName] = useState("");
   const [newUserName, setNewUserName] = useState("");
   const [newUserEmail, setNewUserEmail] = useState("");
 
@@ -32,6 +33,22 @@ export default function Home() {
       setPermissions(await permRes.json());
     } catch (e) {
       console.error("Failed to fetch data", e);
+    }
+  };
+
+  const addProject = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const res = await fetch(`${API_BASE}/create_project`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: newProjectName }),
+    });
+    if (res.ok) {
+      setNewProjectName("");
+      fetchData();
+    } else {
+      const data = await res.json();
+      alert(`Failed to create project: ${data.message || res.statusText}`);
     }
   };
 
@@ -82,6 +99,19 @@ export default function Home() {
             <li key={p}>{p}</li>
           ))}
         </ul>
+
+        <p>
+          <strong>Create Project</strong>
+        </p>
+        <form onSubmit={addProject}>
+          <input
+            placeholder="Project Name"
+            value={newProjectName}
+            onChange={(e) => setNewProjectName(e.target.value)}
+            required
+          />{" "}
+          <button type="submit">Create</button>
+        </form>
       </section>
       <hr />
 
@@ -90,11 +120,7 @@ export default function Home() {
         <table
           border={1}
           cellPadding={5}
-          style={{
-            borderCollapse: "collapse",
-            width: "100%",
-            textAlign: "left",
-          }}
+          style={{ borderCollapse: "collapse", width: "100%", textAlign: "left" }}
         >
           <thead>
             <tr>
@@ -146,11 +172,7 @@ export default function Home() {
         <table
           border={1}
           cellPadding={5}
-          style={{
-            borderCollapse: "collapse",
-            width: "100%",
-            textAlign: "left",
-          }}
+          style={{ borderCollapse: "collapse", width: "100%", textAlign: "left" }}
         >
           <thead>
             <tr>

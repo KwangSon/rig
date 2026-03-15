@@ -3,7 +3,7 @@ pub mod blame;
 pub mod clone;
 pub mod commit;
 pub mod fetch;
-pub mod init;
+pub mod gitmodule;
 pub mod log;
 pub mod pull;
 pub mod push;

@@ -29,16 +29,14 @@ pub async fn run(message: Option<String>) -> Result<(), Box<dyn std::error::Erro
     // Determine message: prefer provided, fallback to last local commit message.
     let message = if let Some(m) = message {
         m
+    } else if local_index.latest_commit.is_empty() {
+        "Automatic push".to_string()
     } else {
-        if local_index.latest_commit.is_empty() {
-            "Automatic push".to_string()
-        } else {
-            local_index
-                .commits
-                .get(&local_index.latest_commit)
-                .map(|c| c.message.clone())
-                .unwrap_or_else(|| "Automatic push".to_string())
-        }
+        local_index
+            .commits
+            .get(&local_index.latest_commit)
+            .map(|c| c.message.clone())
+            .unwrap_or_else(|| "Automatic push".to_string())
     };
 
     println!("Preparing to push with message: '{}'", message);

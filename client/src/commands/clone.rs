@@ -64,11 +64,18 @@ pub async fn run(url: &str, path: &Option<PathBuf>) -> Result<(), Box<dyn std::e
 
     // 2.5 Prompt for username
     use std::io::{self, Write};
-    print!("Enter your username (e.g. Jone <jone@tt.com>): ");
+    let default_username =
+        crate::utils::get_git_user_info().unwrap_or_else(|| "unknown".to_string());
+    print!("Enter your username (default: {}): ", default_username);
     io::stdout().flush()?;
     let mut username = String::new();
     io::stdin().read_line(&mut username)?;
-    let username = username.trim().to_string();
+    let username = username.trim();
+    let username = if username.is_empty() {
+        default_username
+    } else {
+        username.to_string()
+    };
     index.username = Some(username);
 
     // 3. Create .rig folder and write index.json

@@ -446,6 +446,27 @@ pub async fn get_index_handler(
     }))
 }
 
+pub async fn update_gitmodule_handler(
+    Path((project, path)): Path<(String, String)>,
+    State(state): State<SharedState>,
+    Json(payload): Json<protocol::GitModule>,
+) -> StatusCode {
+    let mut projects = state.lock().await;
+    let app_state = match projects.get_mut(&project) {
+        Some(s) => s,
+        None => return StatusCode::NOT_FOUND,
+    };
+
+    app_state.git_modules.insert(path, payload);
+
+    if let Err(e) = persist_index(app_state) {
+        eprintln!("Failed to persist gitmodule update: {}", e);
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    }
+
+    StatusCode::OK
+}
+
 fn persist_index(app_state: &AppState) -> Result<(), String> {
     let index_path = app_state.project_dir.join("index.json");
     let mut index_value: serde_json::Value =
@@ -491,6 +512,25 @@ fn persist_index(app_state: &AppState) -> Result<(), String> {
 
     index_value["artifacts"] = serde_json::Value::Object(artifacts_map);
 
+    let mut modules_map = serde_json::Map::new();
+    for (id, module) in &app_state.git_modules {
+        let mut module_obj = serde_json::Map::new();
+        module_obj.insert(
+            "path".to_string(),
+            serde_json::Value::String(module.path.clone()),
+        );
+        module_obj.insert(
+            "url".to_string(),
+            serde_json::Value::String(module.url.clone()),
+        );
+        module_obj.insert(
+            "commit".to_string(),
+            serde_json::Value::String(module.commit.clone()),
+        );
+        modules_map.insert(id.clone(), serde_json::Value::Object(module_obj));
+    }
+    index_value["git_modules"] = serde_json::Value::Object(modules_map);
+
     fs::write(
         &index_path,
         serde_json::to_string_pretty(&index_value).map_err(|e| e.to_string())?,
@@ -528,18 +568,17 @@ pub async fn push_handler(
 
     // Read index.json to get current state
     let index_path = app_state.project_dir.join("index.json");
-    if let Ok(index_content) = fs::read_to_string(&index_path) {
-        if let Ok(index_val) = serde_json::from_str::<serde_json::Value>(&index_content) {
-            latest_commit_hash = index_val["latest_commit"]
-                .as_str()
-                .unwrap_or("")
-                .to_string();
-            if let Ok(c) = serde_json::from_value::<
-                std::collections::HashMap<String, protocol::Commit>,
-            >(index_val["commits"].clone())
-            {
-                commits_map = c;
-            }
+    if let Ok(index_content) = fs::read_to_string(&index_path)
+        && let Ok(index_val) = serde_json::from_str::<serde_json::Value>(&index_content)
+    {
+        latest_commit_hash = index_val["latest_commit"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        if let Ok(c) = serde_json::from_value::<std::collections::HashMap<String, protocol::Commit>>(
+            index_val["commits"].clone(),
+        ) {
+            commits_map = c;
         }
     }
 

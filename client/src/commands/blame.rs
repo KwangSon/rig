@@ -39,13 +39,13 @@ pub async fn run(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         // Find the commit that introduced this revision
         let mut commit_msg = "Unknown".to_string();
         for commit in local_index.commits.values() {
-            if let Some(&r) = commit.artifacts.get(&artifact_id) {
-                if r == rev.rev {
-                    commit_msg = commit.message.clone();
-                    // We take the first one we find or we can look for the "oldest" commit?
-                    // Usually there's only one "first" commit that introduces a specific revision.
-                    break;
-                }
+            if let Some(&r) = commit.artifacts.get(&artifact_id)
+                && r == rev.rev
+            {
+                commit_msg = commit.message.clone();
+                // We take the first one we find or we can look for the "oldest" commit?
+                // Usually there's only one "first" commit that introduces a specific revision.
+                break;
             }
         }
 
