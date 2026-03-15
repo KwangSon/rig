@@ -1,18 +1,20 @@
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 use std::collections::HashMap;
+use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct User {
-    pub id: String,
+    pub id: Uuid,
     pub name: String,
     pub email: String,
-    pub role: String, // "admin", "user"
+    pub password_hash: String,
+    pub role: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Permission {
-    pub user_id: String,
+    pub user_id: Uuid,
     pub project: String,
     pub access: String, // "read", "write", "admin"
 }

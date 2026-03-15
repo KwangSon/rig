@@ -342,7 +342,7 @@ pub async fn unlock_handler(
                 let user_id = users_data
                     .users
                     .iter()
-                    .find(|u| u.name == payload.user || u.id == payload.user)
+                    .find(|u| u.name == payload.user)
                     .map(|u| u.id.clone());
 
                 if let Some(uid) = user_id {
@@ -641,6 +641,7 @@ pub async fn push_handler(
         username: None,
         latest_commit: new_hash.clone(),
         artifacts: app_state.artifacts.clone(),
+        git_modules: app_state.git_modules.clone(),
         commits: commits_map,
     };
 

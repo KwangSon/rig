@@ -1,13 +1,14 @@
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::Json,
 };
+use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::path::PathBuf;
+use sqlx::PgPool;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use uuid::Uuid;
 
 use protocol::{Permission, User};
 
@@ -19,114 +20,261 @@ pub struct UserState {
 
 pub type SharedUserState = Arc<Mutex<UserState>>;
 
-pub fn get_users_file_path() -> PathBuf {
-    std::env::args()
-        .nth(1)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("server/examples"))
-        .join("users.json")
+const JWT_SECRET: &str = "your-secret-key"; // TODO: use env var
+
+#[derive(Serialize, Deserialize)]
+struct Claims {
+    sub: Uuid, // user id
+    exp: u64,
 }
 
-pub fn load_user_state() -> UserState {
-    let path = get_users_file_path();
-    if path.exists()
-        && let Ok(content) = fs::read_to_string(&path)
-        && let Ok(state) = serde_json::from_str(&content)
-    {
-        return state;
-    }
-    UserState {
-        users: vec![],
-        permissions: vec![],
-    }
-}
+pub async fn load_user_state(db: &PgPool) -> Result<UserState, sqlx::Error> {
+    let users = sqlx::query_as!(
+        User,
+        "SELECT id, name, email, password_hash, role FROM users"
+    )
+    .fetch_all(db)
+    .await?;
 
-pub fn save_user_state(state: &UserState) -> Result<(), String> {
-    let path = get_users_file_path();
-    let content = serde_json::to_string_pretty(state).map_err(|e| e.to_string())?;
-    fs::write(path, content).map_err(|e| e.to_string())?;
-    Ok(())
+    let permissions = sqlx::query_as!(
+        Permission,
+        "SELECT user_id, project, access FROM permissions"
+    )
+    .fetch_all(db)
+    .await?;
+
+    Ok(UserState { users, permissions })
 }
 
 // Handlers
 
-pub async fn get_users_handler(State(state): State<SharedUserState>) -> Json<Vec<User>> {
-    let s = state.lock().await;
-    Json(s.users.clone())
+pub async fn get_users_handler(State(db): State<PgPool>) -> Result<Json<Vec<User>>, StatusCode> {
+    let users = sqlx::query_as!(
+        User,
+        "SELECT id, name, email, password_hash, role FROM users"
+    )
+    .fetch_all(&db)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(users))
 }
 
 #[derive(Deserialize)]
 pub struct CreateUserRequest {
     pub name: String,
     pub email: String,
+    pub password: String,
     pub role: String,
 }
 
 pub async fn create_user_handler(
-    State(state): State<SharedUserState>,
+    State(db): State<PgPool>,
     Json(payload): Json<CreateUserRequest>,
-) -> (StatusCode, Json<User>) {
-    let mut s = state.lock().await;
-    let user = User {
-        id: uuid::Uuid::new_v4().to_string(),
-        name: payload.name,
-        email: payload.email,
-        role: payload.role,
-    };
-    s.users.push(user.clone());
-    if let Err(e) = save_user_state(&s) {
-        eprintln!("Failed to save users: {}", e);
-    }
-    (StatusCode::CREATED, Json(user))
+) -> Result<(StatusCode, Json<User>), StatusCode> {
+    // Hash the password
+    let password_hash = bcrypt::hash(payload.password, bcrypt::DEFAULT_COST)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let user = sqlx::query_as!(
+        User,
+        "INSERT INTO users (name, email, password_hash, role) VALUES ($1, $2, $3, $4) RETURNING id, name, email, password_hash, role",
+        payload.name,
+        payload.email,
+        password_hash,
+        payload.role
+    )
+    .fetch_one(&db)
+    .await
+    .map_err(|e| {
+        if e.to_string().contains("duplicate key") {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    })?;
+
+    Ok((StatusCode::CREATED, Json(user)))
 }
 
 pub async fn delete_user_handler(
-    Path(id): Path<String>,
-    State(state): State<SharedUserState>,
-) -> StatusCode {
-    let mut s = state.lock().await;
-    s.users.retain(|u| u.id != id);
-    s.permissions.retain(|p| p.user_id != id);
-    if let Err(e) = save_user_state(&s) {
-        eprintln!("Failed to save users: {}", e);
-        return StatusCode::INTERNAL_SERVER_ERROR;
-    }
-    StatusCode::NO_CONTENT
+    Path(id): Path<Uuid>,
+    State(db): State<PgPool>,
+) -> Result<StatusCode, StatusCode> {
+    sqlx::query!("DELETE FROM users WHERE id = $1", id)
+        .execute(&db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn get_permissions_handler(
-    State(state): State<SharedUserState>,
-) -> Json<Vec<Permission>> {
-    let s = state.lock().await;
-    Json(s.permissions.clone())
+    State(db): State<PgPool>,
+) -> Result<Json<Vec<Permission>>, StatusCode> {
+    let permissions = sqlx::query_as!(
+        Permission,
+        "SELECT user_id, project, access FROM permissions"
+    )
+    .fetch_all(&db)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(permissions))
 }
 
 #[derive(Deserialize)]
 pub struct SetPermissionRequest {
-    pub user_id: String,
+    pub user_id: Uuid,
     pub project: String,
     pub access: String,
 }
 
 pub async fn set_permission_handler(
-    State(state): State<SharedUserState>,
+    State(db): State<PgPool>,
     Json(payload): Json<SetPermissionRequest>,
-) -> (StatusCode, Json<Permission>) {
-    let mut s = state.lock().await;
+) -> Result<(StatusCode, Json<Permission>), StatusCode> {
+    // Upsert permission
+    let permission = sqlx::query_as!(
+        Permission,
+        "INSERT INTO permissions (user_id, project, access) VALUES ($1, $2, $3)
+         ON CONFLICT (user_id, project) DO UPDATE SET access = EXCLUDED.access
+         RETURNING user_id, project, access",
+        payload.user_id,
+        payload.project,
+        payload.access
+    )
+    .fetch_one(&db)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    // Remove existing permission for this user and project if any
-    s.permissions
-        .retain(|p| !(p.user_id == payload.user_id && p.project == payload.project));
+    Ok((StatusCode::OK, Json(permission)))
+}
 
-    let permission = Permission {
-        user_id: payload.user_id,
-        project: payload.project,
-        access: payload.access,
+#[derive(Deserialize)]
+pub struct RegisterRequest {
+    pub name: String,
+    pub email: String,
+    pub password: String,
+}
+
+#[derive(Serialize)]
+pub struct AuthResponse {
+    pub token: String,
+    pub user: User,
+}
+
+pub async fn register_handler(
+    State(db): State<PgPool>,
+    Json(payload): Json<RegisterRequest>,
+) -> Result<Json<AuthResponse>, StatusCode> {
+    // Hash the password
+    let password_hash = bcrypt::hash(payload.password, bcrypt::DEFAULT_COST)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let user = sqlx::query_as!(
+        User,
+        "INSERT INTO users (name, email, password_hash, role) VALUES ($1, $2, $3, 'user') RETURNING id, name, email, password_hash, role",
+        payload.name,
+        payload.email,
+        password_hash
+    )
+    .fetch_one(&db)
+    .await
+    .map_err(|e| {
+        if e.to_string().contains("duplicate key") {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    })?;
+
+    // Generate JWT
+    let claims = Claims {
+        sub: user.id,
+        exp: (std::time::SystemTime::now() + std::time::Duration::from_secs(24 * 60 * 60))
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
     };
-    s.permissions.push(permission.clone());
+    let token = encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(JWT_SECRET.as_ref()),
+    )
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    if let Err(e) = save_user_state(&s) {
-        eprintln!("Failed to save permissions: {}", e);
+    Ok(Json(AuthResponse { token, user }))
+}
+
+#[derive(Deserialize)]
+pub struct LoginRequest {
+    pub email: String,
+    pub password: String,
+}
+
+pub async fn login_handler(
+    State(db): State<PgPool>,
+    Json(payload): Json<LoginRequest>,
+) -> Result<Json<AuthResponse>, StatusCode> {
+    let user = sqlx::query_as!(
+        User,
+        "SELECT id, name, email, password_hash, role FROM users WHERE email = $1",
+        payload.email
+    )
+    .fetch_optional(&db)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    // Verify password
+    let valid = bcrypt::verify(payload.password, &user.password_hash)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if !valid {
+        return Err(StatusCode::UNAUTHORIZED);
     }
-    (StatusCode::OK, Json(permission))
+
+    // Generate JWT
+    let claims = Claims {
+        sub: user.id,
+        exp: (std::time::SystemTime::now() + std::time::Duration::from_secs(24 * 60 * 60))
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
+    };
+    let token = encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(JWT_SECRET.as_ref()),
+    )
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(AuthResponse { token, user }))
+}
+
+pub async fn me_handler(
+    headers: HeaderMap,
+    State(db): State<PgPool>,
+) -> Result<Json<User>, StatusCode> {
+    let auth_header = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    let token_data = decode::<Claims>(
+        auth_header,
+        &DecodingKey::from_secret(JWT_SECRET.as_ref()),
+        &Validation::default(),
+    )
+    .map_err(|_| StatusCode::UNAUTHORIZED)?;
+
+    let user = sqlx::query_as!(
+        User,
+        "SELECT id, name, email, password_hash, role FROM users WHERE id = $1",
+        token_data.claims.sub
+    )
+    .fetch_optional(&db)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    Ok(Json(user))
 }

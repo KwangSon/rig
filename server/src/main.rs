@@ -3,7 +3,8 @@ use axum::{
     extract::{FromRef, State},
     http::{Method, StatusCode},
     response::Json,
-    routing::{delete, get, post},
+    routing,
+    routing::{delete, get, post, put},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -16,6 +17,43 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
 
 use protocol::Artifact;
+
+// --- Migration Function ---
+
+async fn run_migrations(db: &sqlx::PgPool) -> Result<(), sqlx::Error> {
+    // Create users table
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS users (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            name TEXT NOT NULL,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL CHECK (role IN ('admin', 'user')),
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        )
+        "#,
+    )
+    .execute(db)
+    .await?;
+
+    // Create permissions table
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS permissions (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            project TEXT NOT NULL,
+            access TEXT NOT NULL CHECK (access IN ('read', 'write', 'admin')),
+            UNIQUE(user_id, project)
+        )
+        "#,
+    )
+    .execute(db)
+    .await?;
+
+    Ok(())
+}
 
 // --- App State ---
 
@@ -71,6 +109,7 @@ pub type SharedState = Arc<Mutex<HashMap<String, AppState>>>;
 pub struct CombinedState {
     pub projects: SharedState,
     pub users: users::SharedUserState,
+    pub db: sqlx::PgPool,
 }
 
 impl FromRef<CombinedState> for SharedState {
@@ -85,6 +124,12 @@ impl FromRef<CombinedState> for users::SharedUserState {
     }
 }
 
+impl FromRef<CombinedState> for sqlx::PgPool {
+    fn from_ref(state: &CombinedState) -> Self {
+        state.db.clone()
+    }
+}
+
 // --- Main ---
 
 #[tokio::main]
@@ -95,6 +140,15 @@ async fn main() {
     } else {
         PathBuf::from("server/examples")
     };
+
+    // Connect to database
+    let database_url = "postgresql://kwang@localhost/rig";
+    let db = sqlx::PgPool::connect(database_url)
+        .await
+        .expect("Failed to connect to database");
+
+    // Run migrations
+    run_migrations(&db).await.expect("Failed to run migrations");
 
     // Collect all projects under the base directory (any subdirectory with index.json)
     let mut projects: HashMap<String, AppState> = HashMap::new();
@@ -116,11 +170,16 @@ async fn main() {
     }
 
     let state: SharedState = Arc::new(Mutex::new(projects));
-    let user_state: users::SharedUserState = Arc::new(Mutex::new(users::load_user_state()));
+    let user_state: users::SharedUserState = Arc::new(Mutex::new(
+        users::load_user_state(&db)
+            .await
+            .expect("Failed to load user state"),
+    ));
 
     let combined_state = CombinedState {
         projects: state,
         users: user_state,
+        db,
     };
 
     let cors = CorsLayer::new()
@@ -141,6 +200,9 @@ async fn main() {
             "/permissions",
             get(users::get_permissions_handler).post(users::set_permission_handler),
         )
+        .route("/register", post(users::register_handler))
+        .route("/login", post(users::login_handler))
+        .route("/me", get(users::me_handler))
         .route("/{project}/index.json", get(artifacts::get_index_handler))
         .route(
             "/{project}/artifacts",
