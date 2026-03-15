@@ -54,13 +54,18 @@ enum Commands {
         #[arg(short, long)]
         message: String,
     },
+    /// Shows the working tree status
+    Status,
+    /// Shows the revision history of an artifact
+    Blame {
+        /// The path to the artifact to blame
+        path: PathBuf,
+    },
     /// Adds a new artifact or updates an existing one (requires lock)
     Add {
         /// The path to the artifact to add
         path: PathBuf,
     },
-    /// Shows the working tree status
-    Status,
     /// Locks an artifact to prevent others from editing
     Lock {
         /// The path to the artifact to lock
@@ -123,6 +128,12 @@ async fn main() {
         Commands::Status => {
             if let Err(e) = commands::status::run().await {
                 eprintln!("[error] Failed to get status: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Commands::Blame { path } => {
+            if let Err(e) = commands::blame::run(path.clone()).await {
+                eprintln!("[error] Failed to blame: {}", e);
                 std::process::exit(1);
             }
         }
