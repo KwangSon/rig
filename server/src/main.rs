@@ -19,9 +19,9 @@ use protocol::{Artifact, Revision};
 // --- App State ---
 
 #[derive(Clone)]
-struct AppState {
-    project_dir: PathBuf,
-    artifacts: HashMap<String, Artifact>,
+pub struct AppState {
+    pub project_dir: PathBuf,
+    pub artifacts: HashMap<String, Artifact>,
 }
 
 // --- Request Payloads ---
@@ -57,7 +57,7 @@ pub struct LockResponse {
 
 // --- Application State ---
 
-type SharedState = Arc<Mutex<HashMap<String, AppState>>>;
+pub type SharedState = Arc<Mutex<HashMap<String, AppState>>>;
 
 // --- Main ---
 
@@ -113,6 +113,7 @@ async fn main() {
                 .delete(artifacts::unlock_handler)
                 .get(artifacts::get_lock_handler),
         )
+        .route("/{project}/push", post(artifacts::push_handler))
         .with_state(state)
         .fallback_service(ServeDir::new(base_dir));
 
@@ -203,8 +204,8 @@ async fn create_project_handler(
         "project": payload.name,
         "server_url": "http://localhost:3000",
         "artifacts": {},
-        "commits": [],
-        "latest_commit": 0
+        "commits": {},
+        "latest_commit": ""
     });
     if fs::write(
         &index_path,

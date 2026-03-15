@@ -14,7 +14,7 @@ use protocol::{Artifact, Revision};
 pub struct CreateArtifactRequest {
     path: String,
     content_base64: String,
-    message: Option<String>,
+    _message: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -43,7 +43,7 @@ pub struct RevisionShortResponse {
 #[derive(Deserialize)]
 pub struct CreateRevisionRequest {
     content_base64: String,
-    message: Option<String>,
+    _message: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -147,14 +147,14 @@ pub async fn get_artifact_info_handler(
     State(state): State<SharedState>,
 ) -> Json<ArtifactInfoResponse> {
     let projects = state.lock().await;
-    if let Some(app_state) = projects.get(&project) {
-        if let Some(artifact) = app_state.artifacts.get(&id) {
-            return Json(ArtifactInfoResponse {
-                id: id.clone(),
-                path: artifact.path.clone(),
-                latest_revision: artifact.latest,
-            });
-        }
+    if let Some(app_state) = projects.get(&project)
+        && let Some(artifact) = app_state.artifacts.get(&id)
+    {
+        return Json(ArtifactInfoResponse {
+            id: id.clone(),
+            path: artifact.path.clone(),
+            latest_revision: artifact.latest,
+        });
     }
 
     Json(ArtifactInfoResponse {
@@ -233,16 +233,16 @@ pub async fn get_revisions_handler(
     State(state): State<SharedState>,
 ) -> Json<Vec<RevisionShortResponse>> {
     let projects = state.lock().await;
-    if let Some(app_state) = projects.get(&project) {
-        if let Some(artifact) = app_state.artifacts.get(&id) {
-            return Json(
-                artifact
-                    .revisions
-                    .iter()
-                    .map(|r| RevisionShortResponse { revision: r.rev })
-                    .collect(),
-            );
-        }
+    if let Some(app_state) = projects.get(&project)
+        && let Some(artifact) = app_state.artifacts.get(&id)
+    {
+        return Json(
+            artifact
+                .revisions
+                .iter()
+                .map(|r| RevisionShortResponse { revision: r.rev })
+                .collect(),
+        );
     }
 
     Json(vec![])
@@ -357,13 +357,13 @@ pub async fn get_lock_handler(
     State(state): State<SharedState>,
 ) -> Json<LockResponse> {
     let projects = state.lock().await;
-    if let Some(app_state) = projects.get(&project) {
-        if let Some(artifact) = app_state.artifacts.get(&id) {
-            return Json(LockResponse {
-                locked: artifact.locked_by.is_some(),
-                user: artifact.locked_by.clone(),
-            });
-        }
+    if let Some(app_state) = projects.get(&project)
+        && let Some(artifact) = app_state.artifacts.get(&id)
+    {
+        return Json(LockResponse {
+            locked: artifact.locked_by.is_some(),
+            user: artifact.locked_by.clone(),
+        });
     }
 
     Json(LockResponse {
@@ -443,4 +443,123 @@ fn persist_index(app_state: &AppState) -> Result<(), String> {
     .map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+#[derive(Deserialize)]
+pub struct PushRequest {
+    pub message: String,
+    pub updated_artifacts: std::collections::HashMap<String, String>,
+}
+
+pub async fn push_handler(
+    Path(project): Path<String>,
+    State(state): State<SharedState>,
+    Json(payload): Json<PushRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let mut projects = state.lock().await;
+    let app_state = match projects.get_mut(&project) {
+        Some(s) => s,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Project not found"})),
+            );
+        }
+    };
+
+    let mut latest_commit_hash = String::new();
+    let mut commits_map = std::collections::HashMap::new();
+
+    // Read index.json to get current state
+    let index_path = app_state.project_dir.join("index.json");
+    if let Ok(index_content) = fs::read_to_string(&index_path) {
+        if let Ok(index_val) = serde_json::from_str::<serde_json::Value>(&index_content) {
+            latest_commit_hash = index_val["latest_commit"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            if let Ok(c) = serde_json::from_value::<
+                std::collections::HashMap<String, protocol::Commit>,
+            >(index_val["commits"].clone())
+            {
+                commits_map = c;
+            }
+        }
+    }
+
+    // Process updated artifacts
+    for (id, content_base64) in payload.updated_artifacts {
+        if let Some(artifact) = app_state.artifacts.get_mut(&id) {
+            let new_rev = artifact.latest + 1;
+            let artifact_dir = app_state.project_dir.join("artifacts").join(&id);
+            fs::create_dir_all(&artifact_dir).ok();
+
+            let rev_path = artifact_dir.join(format!("rev{}.blend", new_rev));
+            let bytes = general_purpose::STANDARD
+                .decode(&content_base64)
+                .unwrap_or_default();
+            if fs::write(&rev_path, &bytes).is_err() {
+                continue;
+            }
+
+            artifact.latest = new_rev;
+            artifact.revisions.push(Revision::new(new_rev, &bytes));
+            artifact.locked_by = None; // Auto-unlock on push
+        }
+    }
+
+    // Create a new authoritative commit
+    let mut commit_artifacts = std::collections::HashMap::new();
+    for (id, artifact) in &app_state.artifacts {
+        commit_artifacts.insert(id.clone(), artifact.latest);
+    }
+
+    let parent = if latest_commit_hash.is_empty() {
+        None
+    } else {
+        Some(latest_commit_hash.clone())
+    };
+
+    // Hash the commit: SHA1(parent + message + artifacts_json)
+    let mut hasher = sha1::Sha1::new();
+    use sha1::Digest;
+    hasher.update(parent.as_deref().unwrap_or("").as_bytes());
+    hasher.update(payload.message.as_bytes());
+    hasher.update(serde_json::to_string(&commit_artifacts).unwrap().as_bytes());
+    let new_hash = format!("{:x}", hasher.finalize());
+
+    let new_commit = protocol::Commit {
+        hash: new_hash.clone(),
+        parent,
+        message: payload.message,
+        artifacts: commit_artifacts,
+    };
+
+    commits_map.insert(new_hash.clone(), new_commit.clone());
+
+    // Update index.json
+    let mut full_index: protocol::IndexFile = protocol::IndexFile {
+        project: project.clone(),
+        server_url: None, // Will be filled from previous index if exists
+        latest_commit: new_hash.clone(),
+        artifacts: app_state.artifacts.clone(),
+        commits: commits_map,
+    };
+
+    // Try to preserve server_url from existing index
+    if let Ok(index_content) = fs::read_to_string(&index_path)
+        && let Ok(index_val) = serde_json::from_str::<serde_json::Value>(&index_content)
+    {
+        full_index.server_url = index_val["server_url"].as_str().map(|s| s.to_string());
+    }
+
+    let _ = fs::write(
+        &index_path,
+        serde_json::to_string_pretty(&full_index).unwrap(),
+    );
+
+    (
+        StatusCode::OK,
+        Json(serde_json::to_value(new_commit).unwrap()),
+    )
 }

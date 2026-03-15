@@ -1,4 +1,4 @@
-use protocol::{Artifact, Commit, IndexFile, Revision};
+use protocol::IndexFile;
 use std::fs;
 use std::path::PathBuf;
 

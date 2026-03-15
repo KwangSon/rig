@@ -1,5 +1,6 @@
 use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Serialize};
+use sha1::{Digest, Sha1};
 use std::fs;
 use std::path::PathBuf;
 
@@ -37,6 +38,11 @@ pub async fn run(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let file_data = fs::read(&local_path)
         .map_err(|e| format!("Failed to read local file {}: {}", local_path.display(), e))?;
     let content_base64 = general_purpose::STANDARD.encode(&file_data);
+
+    // Compute hash
+    let mut hasher = Sha1::new();
+    hasher.update(&file_data);
+    let hash = format!("{:x}", hasher.finalize());
 
     // Fetch remote index
     let client = reqwest::Client::new();
@@ -110,7 +116,7 @@ pub async fn run(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
             artifact.latest += 1;
             artifact.revisions.push(Revision {
                 rev: artifact.latest,
-                hash: "".to_string(),
+                hash: hash.clone(),
             });
         }
     } else {
@@ -129,7 +135,7 @@ pub async fn run(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
                 locked_by: None,
                 revisions: vec![Revision {
                     rev: 1,
-                    hash: "".to_string(),
+                    hash: hash.clone(),
                 }],
             },
         );
