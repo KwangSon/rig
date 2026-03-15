@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 
-use crate::commands::status::{Commit, IndexFile};
+use protocol::{Commit, IndexFile};
 
 pub async fn run(message: &str) -> Result<(), Box<dyn std::error::Error>> {
     println!("Running rig commit with message: '{}'", message);
@@ -31,7 +31,6 @@ pub async fn run(message: &str) -> Result<(), Box<dyn std::error::Error>> {
 
     local_index.commits.push(Commit {
         id: next_commit_id,
-        message: message.to_string(),
         artifacts,
     });
 

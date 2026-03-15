@@ -1,10 +1,8 @@
 use clap::{Parser, Subcommand};
-use reqwest;
-use serde_json;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 mod commands;
-use crate::commands::status::IndexFile;
+use protocol::IndexFile;
 
 fn resolve_artifact_id(index: &IndexFile, query: &str) -> Option<String> {
     if index.artifacts.contains_key(query) {
@@ -149,7 +147,7 @@ async fn main() {
     }
 }
 
-async fn lock_artifact(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+async fn lock_artifact(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     println!("Locking artifact: {}", path.display());
 
     // Get current dir, check .rig
@@ -188,6 +186,7 @@ async fn lock_artifact(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>>
     let local_path = current_dir.join(&index.artifacts[&artifact_id].path);
     if local_path.exists() {
         let mut perms = std::fs::metadata(&local_path)?.permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
         perms.set_readonly(false);
         std::fs::set_permissions(&local_path, perms)?;
         println!(
@@ -199,7 +198,7 @@ async fn lock_artifact(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
-async fn unlock_artifact(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+async fn unlock_artifact(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     println!("Unlocking artifact: {}", path.display());
 
     // Get current dir, check .rig

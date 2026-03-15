@@ -1,40 +1,27 @@
 use axum::{
     Router,
-    extract::{Path, State},
+    extract::State,
     http::StatusCode,
     response::Json,
-    routing::{delete, get, post},
+    routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
-use serde_json;
 use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tower_http::services::ServeDir;
 
-// --- Data Structures ---
+use protocol::{Artifact, Revision};
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-struct Artifact {
-    id: String,
-    path: String,
-    latest_revision: u32,
-    revisions: Vec<Revision>,
-    lock: Option<Lock>,
-}
+// --- App State ---
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-struct Revision {
-    revision: u32,
-    message: String,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-struct Lock {
-    user: String,
+#[derive(Clone)]
+struct AppState {
+    project_dir: PathBuf,
+    artifacts: HashMap<String, Artifact>,
 }
 
 // --- Request Payloads ---
@@ -50,17 +37,7 @@ struct CreateProjectResponse {
 }
 
 #[derive(Deserialize)]
-struct CreateArtifactRequest {
-    path: String,
-}
-
-#[derive(Deserialize)]
-struct CreateRevisionRequest {
-    message: String,
-}
-
-#[derive(Deserialize)]
-struct LockRequest {
+pub struct LockRequest {
     user: String,
 }
 
@@ -72,47 +49,13 @@ struct HealthResponse {
 }
 
 #[derive(Serialize)]
-struct CreateArtifactResponse {
-    artifact_id: String,
-}
-
-#[derive(Serialize)]
-struct ArtifactShortResponse {
-    id: String,
-    path: String,
-}
-
-#[derive(Serialize)]
-struct ArtifactInfoResponse {
-    id: String,
-    path: String,
-    latest_revision: u32,
-}
-
-#[derive(Serialize)]
-struct RevisionShortResponse {
-    revision: u32,
-}
-
-#[derive(Serialize)]
-struct CreateRevisionResponse {
-    revision: u32,
-}
-
-#[derive(Serialize)]
-struct LockResponse {
+pub struct LockResponse {
     locked: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     user: Option<String>,
 }
 
 // --- Application State ---
-
-#[derive(Default)]
-struct AppState {
-    artifacts: Vec<Artifact>,
-    project_dir: PathBuf,
-}
 
 type SharedState = Arc<Mutex<HashMap<String, AppState>>>;
 
@@ -131,21 +74,16 @@ async fn main() {
     let mut projects: HashMap<String, AppState> = HashMap::new();
     if let Ok(entries) = fs::read_dir(&base_dir) {
         for entry in entries.flatten() {
-            if let Ok(metadata) = entry.metadata() {
-                if metadata.is_dir() {
-                    let candidate_dir = entry.path();
-                    let index_path = candidate_dir.join("index.json");
-                    if index_path.exists() {
-                        if let Some(project_name) =
-                            candidate_dir.file_name().and_then(|s| s.to_str())
-                        {
-                            if let Ok(app_state) =
-                                load_project_state(project_name.to_string(), &candidate_dir)
-                            {
-                                projects.insert(project_name.to_string(), app_state);
-                            }
-                        }
-                    }
+            if let Ok(metadata) = entry.metadata()
+                && metadata.is_dir()
+            {
+                let candidate_dir = entry.path();
+                let index_path = candidate_dir.join("index.json");
+                if index_path.exists()
+                    && let Some(project_name) = candidate_dir.file_name().and_then(|s| s.to_str())
+                    && let Ok(app_state) = load_project_state(&candidate_dir)
+                {
+                    projects.insert(project_name.to_string(), app_state);
                 }
             }
         }
@@ -185,44 +123,39 @@ async fn main() {
     axum::serve(listener, app).await.expect("Server failed");
 }
 
-fn load_project_state(project_name: String, project_dir: &PathBuf) -> Result<AppState, String> {
+fn load_project_state(project_dir: &Path) -> Result<AppState, String> {
     let index_path = project_dir.join("index.json");
     let index_content = fs::read_to_string(&index_path).map_err(|e| e.to_string())?;
     let index: serde_json::Value =
         serde_json::from_str(&index_content).map_err(|e| e.to_string())?;
 
-    let artifacts: Vec<Artifact> = index["artifacts"]
-        .as_object()
-        .ok_or("Invalid index.json: artifacts is not an object".to_string())?
-        .iter()
-        .map(|(k, v)| {
+    let mut artifacts = HashMap::new();
+    if let Some(artifacts_obj) = index["artifacts"].as_object() {
+        for (k, v) in artifacts_obj {
             let path = v["path"].as_str().unwrap_or("");
             let latest = v["latest"].as_u64().unwrap_or(0) as u32;
-            let locked_by = v["locked_by"].as_str();
+            let locked_by = v["locked_by"].as_str().map(|s| s.to_string());
             let revisions: Vec<Revision> = v["revisions"]
                 .as_array()
                 .unwrap_or(&vec![])
                 .iter()
                 .map(|r| Revision {
-                    revision: r["rev"].as_u64().unwrap_or(0) as u32,
-                    message: "".to_string(),
+                    rev: r["rev"].as_u64().unwrap_or(0) as u32,
+                    hash: r["hash"].as_str().unwrap_or("").to_string(),
                 })
                 .collect();
-            Artifact {
-                id: k.clone(),
+            artifacts.insert(k.clone(), Artifact {
                 path: path.to_string(),
-                latest_revision: latest,
+                latest,
+                locked_by,
                 revisions,
-                lock: locked_by.map(|u| Lock {
-                    user: u.to_string(),
-                }),
-            }
-        })
-        .collect();
+            });
+        }
+    }
 
     Ok(AppState {
+        project_dir: project_dir.to_path_buf(),
         artifacts,
-        project_dir: project_dir.clone(),
     })
 }
 
@@ -252,7 +185,7 @@ async fn create_project_handler(
 
     // Create project directory
     let project_dir = PathBuf::from("server/examples").join(&payload.name);
-    if let Err(_) = fs::create_dir_all(&project_dir) {
+    if fs::create_dir_all(&project_dir).is_err() {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(CreateProjectResponse {
@@ -270,10 +203,12 @@ async fn create_project_handler(
         "commits": [],
         "latest_commit": 0
     });
-    if let Err(_) = fs::write(
+    if fs::write(
         &index_path,
         serde_json::to_string_pretty(&initial_index).unwrap(),
-    ) {
+    )
+    .is_err()
+    {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(CreateProjectResponse {
@@ -283,7 +218,7 @@ async fn create_project_handler(
     }
 
     // Load the new project state
-    match load_project_state(payload.name.clone(), &project_dir) {
+    match load_project_state(&project_dir) {
         Ok(app_state) => {
             projects.insert(payload.name, app_state);
             (

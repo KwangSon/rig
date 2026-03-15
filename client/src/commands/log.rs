@@ -1,6 +1,6 @@
 use std::fs;
 
-use crate::commands::status::IndexFile;
+use protocol::IndexFile;
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("Running rig log...");

@@ -1,36 +1,7 @@
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Revision {
-    pub rev: u32,
-    pub hash: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct ArtifactDetails {
-    pub path: String,
-    pub latest: u32,
-    pub locked_by: Option<String>,
-    pub revisions: Vec<Revision>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Commit {
-    pub id: u32,
-    pub message: String,
-    pub artifacts: HashMap<String, u32>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct IndexFile {
-    pub project: String,
-    pub latest_commit: u32,
-    pub artifacts: HashMap<String, ArtifactDetails>,
-    pub commits: Vec<Commit>,
-}
+use protocol::{Artifact, Commit, IndexFile, Revision};
 
 pub async fn run(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     println!("Running rig pull for path: {:?}", path);
@@ -143,6 +114,7 @@ pub async fn run(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         // If file exists, make it writable first
         if local_path.exists() {
             let mut perms = fs::metadata(&local_path)?.permissions();
+            #[allow(clippy::permissions_set_readonly_false)]
             perms.set_readonly(false);
             fs::set_permissions(&local_path, perms)?;
         }

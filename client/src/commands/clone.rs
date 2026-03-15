@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
+use protocol::{Artifact, Commit, IndexFile, Revision};
 
 pub async fn run(url: &str, path: &Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
     let trimmed_url = url.trim_end_matches('/');
@@ -58,6 +59,10 @@ pub async fn run(url: &str, path: &Option<PathBuf>) -> Result<(), Box<dyn std::e
     let metadata = meta_resp.text().await?;
     println!("   Metadata fetched successfully.");
 
+    // Parse the metadata
+    let index: IndexFile =
+        serde_json::from_str(&metadata).map_err(|e| format!("Failed to parse metadata: {}", e))?;
+
     // 3. Create .rig folder and write index.json
     let clone_path = match path {
         Some(p) => p.clone(),
@@ -78,6 +83,25 @@ pub async fn run(url: &str, path: &Option<PathBuf>) -> Result<(), Box<dyn std::e
 
     let index_path = rig_path.join("index.json");
     fs::write(&index_path, metadata)?;
+
+    // 4. Create empty read-only files for each artifact
+    for artifact in index.artifacts.values() {
+        let file_path = clone_path.join(&artifact.path);
+        println!("-> Creating placeholder for {}", artifact.path);
+
+        // Ensure parent directories exist
+        if let Some(parent) = file_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        // Create empty file
+        fs::write(&file_path, b"")?;
+
+        // Set to read-only
+        let mut perms = fs::metadata(&file_path)?.permissions();
+        perms.set_readonly(true);
+        fs::set_permissions(&file_path, perms)?;
+    }
 
     println!(
         "\nSuccessfully cloned '{}' into {:?}",

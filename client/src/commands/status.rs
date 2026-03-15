@@ -1,36 +1,6 @@
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Revision {
-    pub rev: u32,
-    pub hash: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct ArtifactDetails {
-    pub path: String,
-    pub latest: u32,
-    pub locked_by: Option<String>,
-    pub revisions: Vec<Revision>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Commit {
-    pub id: u32,
-    pub message: String,
-    pub artifacts: HashMap<String, u32>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct IndexFile {
-    pub project: String,
-    pub server_url: String,
-    pub latest_commit: u32,
-    pub artifacts: HashMap<String, ArtifactDetails>,
-    pub commits: Vec<Commit>,
-}
+use protocol::{Artifact, Commit, IndexFile, Revision};
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("Running rig status...");

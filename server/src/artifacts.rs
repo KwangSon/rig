@@ -5,10 +5,10 @@ use axum::{
 };
 use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Serialize};
-use serde_json;
 use std::fs;
 
-use crate::{AppState, Artifact, Lock, LockRequest, LockResponse, Revision, SharedState};
+use crate::{AppState, LockRequest, LockResponse, SharedState};
+use protocol::{Artifact, Revision};
 
 #[derive(Deserialize)]
 pub struct CreateArtifactRequest {
@@ -71,7 +71,7 @@ pub async fn create_artifact_handler(
         }
     };
 
-    if app_state.artifacts.iter().any(|a| a.id == payload.path) {
+    if app_state.artifacts.contains_key(&payload.path) {
         return (
             StatusCode::CONFLICT,
             Json(CreateArtifactResponse {
@@ -89,7 +89,7 @@ pub async fn create_artifact_handler(
     let bytes = general_purpose::STANDARD
         .decode(&payload.content_base64)
         .unwrap_or_default();
-    if let Err(_e) = fs::write(&rev_path, &bytes) {
+    if fs::write(&rev_path, &bytes).is_err() {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(CreateArtifactResponse {
@@ -98,19 +98,15 @@ pub async fn create_artifact_handler(
         );
     }
 
-    app_state.artifacts.push(Artifact {
-        id: payload.path.clone(),
+    app_state.artifacts.insert(payload.path.clone(), Artifact {
         path: payload.path.clone(),
-        latest_revision: 1,
-        revisions: vec![Revision {
-            revision: 1,
-            message: payload.message.unwrap_or_default(),
-        }],
-        lock: None,
+        latest: 1,
+        locked_by: None,
+        revisions: vec![Revision::new(1, &bytes)],
     });
 
     // Persist index.json (best-effort)
-    if let Err(e) = persist_index(&app_state) {
+    if let Err(e) = persist_index(app_state) {
         eprintln!("Failed to persist index.json: {}", e);
     }
 
@@ -132,8 +128,8 @@ pub async fn get_artifacts_handler(
             app_state
                 .artifacts
                 .iter()
-                .map(|a| ArtifactShortResponse {
-                    id: a.id.clone(),
+                .map(|(id, a)| ArtifactShortResponse {
+                    id: id.clone(),
                     path: a.path.clone(),
                 })
                 .collect(),
@@ -149,11 +145,11 @@ pub async fn get_artifact_info_handler(
 ) -> Json<ArtifactInfoResponse> {
     let projects = state.lock().await;
     if let Some(app_state) = projects.get(&project) {
-        if let Some(artifact) = app_state.artifacts.iter().find(|a| a.id == id) {
+        if let Some(artifact) = app_state.artifacts.get(&id) {
             return Json(ArtifactInfoResponse {
-                id: artifact.id.clone(),
+                id: id.clone(),
                 path: artifact.path.clone(),
-                latest_revision: artifact.latest_revision,
+                latest_revision: artifact.latest,
             });
         }
     }
@@ -182,7 +178,7 @@ pub async fn create_revision_handler(
     };
     let project_dir = app_state.project_dir.clone();
 
-    let artifact = match app_state.artifacts.iter_mut().find(|a| a.id == id) {
+    let artifact = match app_state.artifacts.get_mut(&id) {
         Some(a) => a,
         None => {
             return (
@@ -193,36 +189,33 @@ pub async fn create_revision_handler(
     };
 
     // Must be locked by someone to allow revision
-    if artifact.lock.is_none() {
+    if artifact.locked_by.is_none() {
         return (
             StatusCode::CONFLICT,
             Json(CreateRevisionResponse { revision: 0 }),
         );
     }
 
-    let new_rev = artifact.latest_revision + 1;
-    let artifact_dir = project_dir.join("artifacts").join(&artifact.id);
+    let new_rev = artifact.latest + 1;
+    let artifact_dir = project_dir.join("artifacts").join(&id);
     fs::create_dir_all(&artifact_dir).ok();
 
     let rev_path = artifact_dir.join(format!("rev{}.blend", new_rev));
     let bytes = general_purpose::STANDARD
         .decode(&payload.content_base64)
         .unwrap_or_default();
-    if let Err(_e) = fs::write(&rev_path, &bytes) {
+    if fs::write(&rev_path, &bytes).is_err() {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(CreateRevisionResponse { revision: 0 }),
         );
     }
 
-    artifact.latest_revision = new_rev;
-    artifact.revisions.push(Revision {
-        revision: new_rev,
-        message: payload.message.unwrap_or_default(),
-    });
+    artifact.latest = new_rev;
+    artifact.revisions.push(Revision::new(new_rev, &bytes));
 
     // Persist index.json (best-effort)
-    if let Err(e) = persist_index(&app_state) {
+    if let Err(e) = persist_index(app_state) {
         eprintln!("Failed to persist index.json: {}", e);
     }
 
@@ -238,13 +231,13 @@ pub async fn get_revisions_handler(
 ) -> Json<Vec<RevisionShortResponse>> {
     let projects = state.lock().await;
     if let Some(app_state) = projects.get(&project) {
-        if let Some(artifact) = app_state.artifacts.iter().find(|a| a.id == id) {
+        if let Some(artifact) = app_state.artifacts.get(&id) {
             return Json(
                 artifact
                     .revisions
                     .iter()
                     .map(|r| RevisionShortResponse {
-                        revision: r.revision,
+                        revision: r.rev,
                     })
                     .collect(),
             );
@@ -273,13 +266,11 @@ pub async fn lock_handler(
         }
     };
 
-    if let Some(artifact) = app_state.artifacts.iter_mut().find(|a| a.id == id) {
-        if artifact.lock.is_none() {
-            artifact.lock = Some(Lock {
-                user: payload.user.clone(),
-            });
+    if let Some(artifact) = app_state.artifacts.get_mut(&id) {
+        if artifact.locked_by.is_none() {
+            artifact.locked_by = Some(payload.user.clone());
             // Persist lock state
-            if let Err(e) = persist_index(&app_state) {
+            if let Err(e) = persist_index(app_state) {
                 eprintln!("Failed to persist lock state: {}", e);
             }
             (
@@ -289,7 +280,7 @@ pub async fn lock_handler(
                     user: Some(payload.user),
                 }),
             )
-        } else if artifact.lock.as_ref().map(|l| l.user.clone()) == Some(payload.user.clone()) {
+        } else if artifact.locked_by == Some(payload.user.clone()) {
             // Already locked by the same user: treat as success
             (
                 StatusCode::OK,
@@ -303,7 +294,7 @@ pub async fn lock_handler(
                 StatusCode::CONFLICT,
                 Json(LockResponse {
                     locked: false,
-                    user: artifact.lock.as_ref().map(|l| l.user.clone()),
+                    user: artifact.locked_by.clone(),
                 }),
             )
         }
@@ -336,10 +327,10 @@ pub async fn unlock_handler(
         }
     };
 
-    if let Some(artifact) = app_state.artifacts.iter_mut().find(|a| a.id == id) {
-        artifact.lock = None;
+    if let Some(artifact) = app_state.artifacts.get_mut(&id) {
+        artifact.locked_by = None;
         // Persist lock state
-        if let Err(e) = persist_index(&app_state) {
+        if let Err(e) = persist_index(app_state) {
             eprintln!("Failed to persist lock state: {}", e);
         }
         (
@@ -366,10 +357,10 @@ pub async fn get_lock_handler(
 ) -> Json<LockResponse> {
     let projects = state.lock().await;
     if let Some(app_state) = projects.get(&project) {
-        if let Some(artifact) = app_state.artifacts.iter().find(|a| a.id == id) {
+        if let Some(artifact) = app_state.artifacts.get(&id) {
             return Json(LockResponse {
-                locked: artifact.lock.is_some(),
-                user: artifact.lock.as_ref().map(|l| l.user.clone()),
+                locked: artifact.locked_by.is_some(),
+                user: artifact.locked_by.clone(),
             });
         }
     }
@@ -387,10 +378,10 @@ pub async fn get_index_handler(
     let projects = state.lock().await;
     if let Some(app_state) = projects.get(&project) {
         let index_path = app_state.project_dir.join("index.json");
-        if let Ok(content) = fs::read_to_string(&index_path) {
-            if let Ok(value) = serde_json::from_str(&content) {
-                return Json(value);
-            }
+        if let Ok(content) = fs::read_to_string(&index_path)
+            && let Ok(value) = serde_json::from_str(&content)
+        {
+            return Json(value);
         }
     }
 
@@ -406,7 +397,7 @@ fn persist_index(app_state: &AppState) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
 
     let mut artifacts_map = serde_json::Map::new();
-    for artifact in &app_state.artifacts {
+    for (id, artifact) in &app_state.artifacts {
         let mut artifact_obj = serde_json::Map::new();
         artifact_obj.insert(
             "path".to_string(),
@@ -414,12 +405,12 @@ fn persist_index(app_state: &AppState) -> Result<(), String> {
         );
         artifact_obj.insert(
             "latest".to_string(),
-            serde_json::Value::Number(artifact.latest_revision.into()),
+            serde_json::Value::Number(artifact.latest.into()),
         );
         artifact_obj.insert(
             "locked_by".to_string(),
-            match &artifact.lock {
-                Some(lock) => serde_json::Value::String(lock.user.clone()),
+            match &artifact.locked_by {
+                Some(user) => serde_json::Value::String(user.clone()),
                 None => serde_json::Value::Null,
             },
         );
@@ -431,18 +422,18 @@ fn persist_index(app_state: &AppState) -> Result<(), String> {
                 let mut m = serde_json::Map::new();
                 m.insert(
                     "rev".to_string(),
-                    serde_json::Value::Number(r.revision.into()),
+                    serde_json::Value::Number(r.rev.into()),
                 );
                 m.insert(
                     "hash".to_string(),
-                    serde_json::Value::String("".to_string()),
+                    serde_json::Value::String(r.hash.clone()),
                 );
                 serde_json::Value::Object(m)
             })
             .collect();
 
         artifact_obj.insert("revisions".to_string(), serde_json::Value::Array(revisions));
-        artifacts_map.insert(artifact.id.clone(), serde_json::Value::Object(artifact_obj));
+        artifacts_map.insert(id.clone(), serde_json::Value::Object(artifact_obj));
     }
 
     index_value["artifacts"] = serde_json::Value::Object(artifacts_map);

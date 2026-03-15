@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-use crate::commands::status::{ArtifactDetails, IndexFile, Revision};
+use protocol::{Artifact, IndexFile, Revision};
 
 #[derive(Serialize, Deserialize)]
 struct AddPayload {
@@ -120,14 +120,11 @@ pub async fn run(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 
         local_index.artifacts.insert(
             artifact_name.clone(),
-            ArtifactDetails {
+            Artifact {
                 path: artifact_name.clone(),
                 latest: 1,
                 locked_by: None,
-                revisions: vec![Revision {
-                    rev: 1,
-                    hash: "".to_string(),
-                }],
+                revisions: vec![Revision { rev: 1, hash: "".to_string() }],
             },
         );
     }

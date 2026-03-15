@@ -2,7 +2,7 @@ use base64::{Engine as _, engine::general_purpose};
 use serde::Serialize;
 use std::fs;
 
-use crate::commands::status::{IndexFile, Revision};
+use protocol::{IndexFile, Revision};
 
 #[derive(Serialize)]
 struct PushPayload {
@@ -21,7 +21,7 @@ pub async fn run(message: Option<String>) -> Result<(), Box<dyn std::error::Erro
         let index_path = rig_dir.join("index.json");
         let index_content = std::fs::read_to_string(&index_path)
             .map_err(|e| format!("Failed to read local index.json: {}", e))?;
-        let local_index: super::status::IndexFile = serde_json::from_str(&index_content)
+        let local_index: IndexFile = serde_json::from_str(&index_content)
             .map_err(|e| format!("Failed to parse local index.json: {}", e))?;
         local_index
             .commits
@@ -112,10 +112,8 @@ pub async fn run(message: Option<String>) -> Result<(), Box<dyn std::error::Erro
 
         // Update local index
         artifact_details.latest = new_rev;
-        artifact_details.revisions.push(Revision {
-            rev: new_rev,
-            hash: "".to_string(),
-        });
+        let hash = protocol::Revision::new(new_rev, &file_data).hash;
+        artifact_details.revisions.push(Revision { rev: new_rev, hash });
 
         // Unlock on server
         let unlock_url = format!(
