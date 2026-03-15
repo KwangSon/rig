@@ -187,7 +187,7 @@ async fn main() {
         .allow_origin(Any)
         .allow_headers(Any);
 
-    let app = Router::new()
+    let api_routes = Router::new()
         .route("/health", get(health_handler))
         .route("/projects", get(get_projects_handler))
         .route("/create_project", post(create_project_handler))
@@ -231,7 +231,10 @@ async fn main() {
             "/{project}/artifacts/{id}/{filename}",
             get(artifacts::download_artifact_handler),
         )
-        .with_state(combined_state)
+        .with_state(combined_state);
+
+    let app = Router::new()
+        .nest("/api/v1", api_routes)
         .layer(cors)
         .fallback_service(ServeDir::new(&base_dir));
 
