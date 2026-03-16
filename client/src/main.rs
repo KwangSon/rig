@@ -214,9 +214,13 @@ async fn lock_artifact(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
 
     // Send POST to server (lock endpoint is namespaced by project)
     let client = reqwest::Client::new();
+    let server_url = index
+        .server_url
+        .as_deref()
+        .unwrap_or("http://localhost:3000");
     let url = format!(
-        "http://localhost:3000/{}/artifacts/{}/lock",
-        index.project, artifact_id
+        "{}/api/v1/{}/artifacts/{}/lock",
+        server_url, index.project, artifact_id
     );
     let body = serde_json::json!({"user": username});
     let resp = client.post(&url).json(&body).send().await?;
@@ -267,9 +271,13 @@ async fn unlock_artifact(path: &Path, force: bool) -> Result<(), Box<dyn std::er
 
     // Send DELETE to server (unlock endpoint is namespaced by project)
     let client = reqwest::Client::new();
+    let server_url = index
+        .server_url
+        .as_deref()
+        .unwrap_or("http://localhost:3000");
     let url = format!(
-        "http://localhost:3000/{}/artifacts/{}/lock",
-        index.project, artifact_id
+        "{}/api/v1/{}/artifacts/{}/lock",
+        server_url, index.project, artifact_id
     );
     let body = serde_json::json!({
         "user": username,

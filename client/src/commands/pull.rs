@@ -78,10 +78,18 @@ pub async fn run(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         let latest_rev = artifact_details.latest;
         println!("-> Pulling {} (rev {})", artifact_name, latest_rev);
 
+        // Determine filename based on extension
+        let ext = std::path::Path::new(&artifact_name)
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|s| format!(".{}", s))
+            .unwrap_or_else(|| "".to_string());
+        let filename = format!("rev{}{}", latest_rev, ext);
+
         // Download URL: /{project}/artifacts/{artifact_id}/{filename}
         let download_url = format!(
-            "{}/api/v1/{}/artifacts/{}/rev{}.blend",
-            server_url, local_index.project, artifact_name, latest_rev
+            "{}/api/v1/{}/artifacts/{}/{}",
+            server_url, local_index.project, artifact_name, filename
         );
 
         println!("   Downloading from {}", download_url);

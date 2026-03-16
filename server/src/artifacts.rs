@@ -53,6 +53,15 @@ pub struct CreateRevisionResponse {
 
 // Placeholder implementations
 
+fn get_rev_filename(id: &str, rev: u32) -> String {
+    let ext = std::path::Path::new(id)
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| format!(".{}", s))
+        .unwrap_or_else(|| "".to_string());
+    format!("rev{}{}", rev, ext)
+}
+
 pub async fn create_artifact_handler(
     Path(project): Path<String>,
     State(state): State<SharedState>,
@@ -85,7 +94,8 @@ pub async fn create_artifact_handler(
     fs::create_dir_all(&artifact_dir).ok();
 
     // Write first revision file
-    let rev_path = artifact_dir.join("rev1.blend");
+    let filename = get_rev_filename(&payload.path, 1);
+    let rev_path = artifact_dir.join(&filename);
     let bytes = general_purpose::STANDARD
         .decode(&payload.content_base64)
         .unwrap_or_default();
@@ -203,7 +213,8 @@ pub async fn create_revision_handler(
     let artifact_dir = project_dir.join("artifacts").join(&id);
     fs::create_dir_all(&artifact_dir).ok();
 
-    let rev_path = artifact_dir.join(format!("rev{}.blend", new_rev));
+    let filename = get_rev_filename(&id, new_rev);
+    let rev_path = artifact_dir.join(&filename);
     let bytes = general_purpose::STANDARD
         .decode(&payload.content_base64)
         .unwrap_or_default();
@@ -587,7 +598,8 @@ pub async fn push_handler(
             let artifact_dir = app_state.project_dir.join("artifacts").join(&id);
             fs::create_dir_all(&artifact_dir).ok();
 
-            let rev_path = artifact_dir.join(format!("rev{}.blend", new_rev));
+            let filename = get_rev_filename(&id, new_rev);
+            let rev_path = artifact_dir.join(&filename);
             if fs::write(&rev_path, &bytes).is_err() {
                 continue;
             }
@@ -601,7 +613,8 @@ pub async fn push_handler(
             let artifact_dir = app_state.project_dir.join("artifacts").join(&id);
             fs::create_dir_all(&artifact_dir).ok();
 
-            let rev_path = artifact_dir.join("rev1.blend");
+            let filename = get_rev_filename(&id, 1);
+            let rev_path = artifact_dir.join(&filename);
             if fs::write(&rev_path, &bytes).is_err() {
                 continue;
             }
