@@ -28,7 +28,9 @@ pub async fn run(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     println!("Project: {}", local_index.project);
 
     // 2. Fetch latest index.json from the server
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
+        .build()?;
     let server_url = local_index
         .server_url
         .as_deref()
@@ -166,6 +168,18 @@ pub async fn run(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 
         println!("   Saved {} as read-only", local_path.display());
     }
+
+    // 5. Update local index.json with the remote one
+    // Preserve local fields like server_url and username
+    let mut final_index = remote_index;
+    final_index.server_url = local_index.server_url;
+    final_index.username = local_index.username;
+
+    fs::write(
+        &local_index_path,
+        serde_json::to_string_pretty(&final_index)?,
+    )?;
+    println!("   Local index.json updated.");
 
     println!("Pull completed successfully.");
 

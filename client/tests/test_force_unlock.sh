@@ -4,14 +4,40 @@ set -e
 # Setup paths
 ROOT_DIR="$(pwd)"
 RIG_BIN="$ROOT_DIR/target/debug/client"
-PROJECT_NAME="test_force_unlock_project"
+PROJECT_NAME="test_force_unlock_project_$(date +%s)"
 CLONE_DIR_1="clone_user_1"
-CLONE_DIR_2="clone_user_2"
+CLONE_DIR_2="clone_admin"
 SERVER_URL="http://localhost:3000"
+API_URL="$SERVER_URL/api/v1"
+
+# Credentials (from setup.sh)
+ADMIN_EMAIL="admin@example.com"
+ADMIN_PASSWORD="password"
+USER1_EMAIL="user1@example.com"
+USER1_PASSWORD="password"
+
+# Save option check
+SAVE_PROJECT=false
+if [[ "$*" == *"--save"* ]]; then
+    SAVE_PROJECT=true
+    echo "-> Save mode enabled: Project and local files will be preserved."
+fi
 
 # Cleanup function
 function cleanup {
+    if [ "$SAVE_PROJECT" = true ]; then
+        echo -e "\n--- Skipping cleanup as requested (save mode) ---"
+        echo "Project: $PROJECT_NAME"
+        echo "Local directories: $CLONE_DIR_1, $CLONE_DIR_2"
+        return
+    fi
+
     echo -e "\n--- Cleaning up test directories ---"
+    if [ ! -z "$AUTH_TOKEN" ]; then
+        echo "Deleting test project '$PROJECT_NAME' via API..."
+        curl -s -X DELETE "$API_URL/projects/$PROJECT_NAME" \
+             -H "Authorization: Bearer $AUTH_TOKEN" > /dev/null
+    fi
     cd "$ROOT_DIR"
     rm -rf "$PROJECT_NAME" "$CLONE_DIR_1" "$CLONE_DIR_2"
 }
@@ -25,46 +51,70 @@ fi
 
 echo "=== Starting Force Unlock Test ==="
 
-# 1. Initialize project
-echo -e "\n--- 1. Initializing project: $PROJECT_NAME ---"
-mkdir -p "$PROJECT_NAME"
-cd "$PROJECT_NAME"
-# 첫 번째 \n은 기본 서버 URL 수락, 두 번째는 사용자 이름 입력
-printf "\nUser1\n" | "$RIG_BIN" init
+# 0. Login to get Token for Admin
+echo "-> Logging in as admin..."
+LOGIN_RESP=$(curl -s -X POST "$API_URL/login" \
+    -H "Content-Type: application/json" \
+    -d "{\"email\":\"$ADMIN_EMAIL\", \"password\":\"$ADMIN_PASSWORD\"}")
+
+AUTH_TOKEN=$(echo $LOGIN_RESP | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+
+if [ -z "$AUTH_TOKEN" ]; then
+    echo "Error: Failed to login and get auth token."
+    echo "Response: $LOGIN_RESP"
+    exit 1
+fi
+
+# 1. Create project via API (Admin is the owner)
+echo "-> Creating project '$PROJECT_NAME' via API..."
+CREATE_RESP=$(curl -s -X POST "$API_URL/create_project" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $AUTH_TOKEN" \
+    -d "{\"name\":\"$PROJECT_NAME\"}")
+
+if [[ $CREATE_RESP == *"error"* ]]; then
+    echo "Error: Failed to create project."
+    echo "Response: $CREATE_RESP"
+    exit 1
+fi
+
+# 2. Clone for User 1 (Regular User) and Admin
+cd "$ROOT_DIR"
+echo -e "\n--- 2. Cloning for User 1 and Admin ---"
+"$RIG_BIN" clone "$SERVER_URL/$PROJECT_NAME" "$CLONE_DIR_1" --username "User1"
+"$RIG_BIN" clone "$SERVER_URL/$PROJECT_NAME" "$CLONE_DIR_2" --username "Admin"
+
+# 3. Add initial file as Admin and Push
+cd "$ROOT_DIR/$CLONE_DIR_2"
 echo "Initial content" > file.txt
 "$RIG_BIN" add file.txt
 "$RIG_BIN" commit -m "Initial commit"
 "$RIG_BIN" push
 
-# 2. Clone for User 1 and User 2
-cd "$ROOT_DIR"
-echo -e "\n--- 2. Cloning for User 1 and User 2 ---"
-printf "User1\n" | "$RIG_BIN" clone "$SERVER_URL/$PROJECT_NAME" "$CLONE_DIR_1"
-printf "User2\n" | "$RIG_BIN" clone "$SERVER_URL/$PROJECT_NAME" "$CLONE_DIR_2"
-
-# 3. User 1 locks the file
+# 4. User 1 pulls and locks the file
 cd "$ROOT_DIR/$CLONE_DIR_1"
-echo -e "\n--- 3. User 1 locking file ---"
+echo -e "\n--- 3. User 1 pulling and locking file ---"
+"$RIG_BIN" pull file.txt
 "$RIG_BIN" lock file.txt
 
-# 4. User 2 tries to unlock it (should fail)
+# 5. Admin tries to unlock it without force (should fail because it's locked by User1)
 cd "$ROOT_DIR/$CLONE_DIR_2"
-echo -e "\n--- 4. User 2 trying to unlock file (should fail) ---"
+echo -e "\n--- 4. Admin trying to unlock User 1's file (should fail without --force) ---"
 if "$RIG_BIN" unlock file.txt; then
-    echo "Error: User 2 should NOT be able to unlock User 1's file without force"
+    echo "Error: Admin should NOT be able to unlock User 1's file without --force"
     exit 1
 else
-    echo "Success: User 2 failed to unlock (as expected)"
+    echo "Success: Admin failed to unlock without --force (as expected)"
 fi
 
-# 5. User 2 force unlocks it (should succeed)
-echo -e "\n--- 5. User 2 force unlocking file (should succeed) ---"
+# 6. Admin force unlocks it (should succeed)
+echo -e "\n--- 5. Admin force unlocking file (should succeed) ---"
 "$RIG_BIN" unlock file.txt --force
-echo "Success: User 2 force unlocked the file"
+echo "Success: Admin force unlocked the file"
 
-# 6. User 2 can now lock it
-echo -e "\n--- 6. User 2 can now lock the file ---"
+# 7. Admin can now lock it
+echo -e "\n--- 6. Admin can now lock the file ---"
 "$RIG_BIN" lock file.txt
-echo "Success: User 2 locked the file after force unlock"
+echo "Success: Admin locked the file after force unlock"
 
 echo -e "\n=== Force Unlock Test Completed Successfully! ==="

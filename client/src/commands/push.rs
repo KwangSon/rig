@@ -47,11 +47,15 @@ pub async fn run(_message_opt: Option<String>) -> Result<(), Box<dyn std::error:
         .server_url
         .as_ref()
         .ok_or("Server URL not configured")?;
-    let client = reqwest::Client::new();
 
-    // 1. Prepare Multipart Form
-    let mut form = multipart::Form::new();
+    // Build client with a longer timeout for large file uploads
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
+        .build()?;
+
+    // 1. Prepare Metadata and artifacts info
     let mut artifact_compression = HashMap::new();
+    let mut artifact_data = Vec::new();
     let mut artifact_paths = Vec::new();
 
     // Compression threshold (1MB)
@@ -79,37 +83,47 @@ pub async fn run(_message_opt: Option<String>) -> Result<(), Box<dyn std::error:
                 let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
                 encoder.write_all(&file_data)?;
                 let compressed_data = encoder.finish()?;
-                println!("done. ({} bytes)", compressed_data.len());
-                file_data = compressed_data;
-                is_compressed = true;
+
+                if compressed_data.len() < file_data.len() {
+                    println!("done. ({} bytes)", compressed_data.len());
+                    file_data = compressed_data;
+                    is_compressed = true;
+                } else {
+                    println!("skipped (compression didn't reduce size).");
+                }
             }
 
             artifact_compression.insert(artifact_id.clone(), is_compressed);
-
-            // Add to multipart form as a file part
-            let part = multipart::Part::bytes(file_data).file_name(artifact_id.clone());
-            form = form.part(format!("file_{}", artifact_id), part);
-
+            artifact_data.push((artifact_id.clone(), file_data));
             artifact_paths.push(local_path);
         }
     }
 
-    if artifact_compression.is_empty() {
+    if artifact_data.is_empty() {
         println!("No local changes found to push.");
         return Ok(());
     }
 
+    // 2. Build Multipart Form (Metadata FIRST)
+    let mut form = multipart::Form::new();
+
     // Add metadata part
-    let metadata = PushMetadata {
-        commit,
+    let push_metadata = PushMetadata {
+        commit: commit.clone(),
         artifact_compression,
     };
     form = form.part(
         "metadata",
-        multipart::Part::text(serde_json::to_string(&metadata)?),
+        multipart::Part::text(serde_json::to_string(&push_metadata)?),
     );
 
-    // 2. Send PushRequest to server
+    // Add file parts
+    for (id, data) in artifact_data {
+        let part = multipart::Part::bytes(data).file_name(id.clone());
+        form = form.part(format!("file_{}", id), part);
+    }
+
+    // 3. Send PushRequest to server
     let push_url = format!("{}/api/v1/{}/push", server_url, local_index.project);
     println!("-> Sending push request (multipart) to server...");
 

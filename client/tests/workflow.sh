@@ -13,8 +13,22 @@ API_URL="$SERVER_URL/api/v1"
 ADMIN_EMAIL="admin@example.com"
 ADMIN_PASSWORD="password"
 
+# Save option check
+SAVE_PROJECT=false
+if [[ "$*" == *"--save"* ]]; then
+    SAVE_PROJECT=true
+    echo "-> Save mode enabled: Project and local files will be preserved."
+fi
+
 # Cleanup function
 function cleanup {
+    if [ "$SAVE_PROJECT" = true ]; then
+        echo -e "\n--- Skipping cleanup as requested (save mode) ---"
+        echo "Project: $PROJECT_NAME"
+        echo "Local directories: $PROJECT_NAME, $CLONE_DIR"
+        return
+    fi
+
     echo -e "\n--- Cleaning up ---"
     if [ ! -z "$AUTH_TOKEN" ]; then
         echo "Deleting test project '$PROJECT_NAME' via API..."
@@ -90,11 +104,11 @@ echo "Revision 2 content from clone" >> file1.txt
 "$RIG_BIN" commit -m "Revision 2 from cloned repository"
 "$RIG_BIN" push
 
-# 6. Verify History (Log & Blame)
+# 6. Verify History (Log)
 echo -e "\n--- 5. Verifying history in clone ---"
 "$RIG_BIN" log
 echo ""
-"$RIG_BIN" blame file1.txt
+"$RIG_BIN" log file1.txt
 
 # 7. Synchronize Original Repository
 cd "$ROOT_DIR/$PROJECT_NAME"
@@ -106,4 +120,3 @@ cat file1.txt
 
 echo -e "\n=== Full Workflow Test Completed Successfully! ==="
 echo "You can now check the project '$PROJECT_NAME' in the Web UI."
-read -p "Press [Enter] to delete the test project and cleanup local files, or Ctrl+C to keep them..."

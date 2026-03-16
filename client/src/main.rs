@@ -38,7 +38,10 @@ enum Commands {
     /// Fetches metadata from the remote repository without downloading files
     Fetch,
     /// Shows commit history
-    Log,
+    Log {
+        /// Optional path to show history for a specific artifact
+        path: Option<PathBuf>,
+    },
     /// Pulls changes from the remote repository and updates local files
     Pull {
         /// The path to the artifact to pull
@@ -135,8 +138,8 @@ async fn main() {
                 std::process::exit(1);
             }
         }
-        Commands::Log => {
-            if let Err(e) = commands::log::run().await {
+        Commands::Log { path } => {
+            if let Err(e) = commands::log::run(path.clone()).await {
                 eprintln!("[error] Failed to show log: {}", e);
                 std::process::exit(1);
             }
