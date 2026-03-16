@@ -5,12 +5,8 @@
 
 ## Database
 - Start PostgreSQL: `brew services start postgresql` (or your local setup)
+- Setup database & fixtures: `./server/fixtures/setup.sh` (Resets DB, runs migrations, inserts test users and projects)
 - Connect to DB: `psql postgresql://kwang@localhost/rig`
-- For schema changes (initial phase): Drop DB, modify SQL files, recreate DB
-  - Drop: `dropdb rig` (run in shell, not inside psql)
-  - Recreate: `createdb rig` (run in shell, not inside psql)
-  - Run schema: `psql postgresql://kwang@localhost/rig < server/migrations/001_create_users.sql` and `psql postgresql://kwang@localhost/rig < server/migrations/002_create_permissions.sql` (includes fixture data)
-- Run fixture setup: `./server/fixtures/setup.sh` (migrates all directories in server/examples to DB as projects)
 
 ## API server
 `DATABASE_URL=postgresql://kwang@localhost/rig cargo run -p server -- server/examples`

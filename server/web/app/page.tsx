@@ -6,18 +6,10 @@ const API_BASE = "http://localhost:3000/api/v1";
 
 export default function Home() {
   const [projects, setProjects] = useState<any[]>([]);
-  const [users, setUsers] = useState<any[]>([]);
-  const [permissions, setPermissions] = useState<any[]>([]);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [token, setToken] = useState("");
 
   const [newProjectName, setNewProjectName] = useState("");
-  const [newUserName, setNewUserName] = useState("");
-  const [newUserEmail, setNewUserEmail] = useState("");
-
-  const [permUserId, setPermUserId] = useState("");
-  const [permProject, setPermProject] = useState("");
-  const [permAccess, setPermAccess] = useState("read");
 
   useEffect(() => {
     const t = localStorage.getItem("token");
@@ -25,28 +17,17 @@ export default function Home() {
       setToken(t);
       setIsLoggedIn(true);
     }
-    fetchData();
-  }, []);
+    fetchProjects();
+  }, [isLoggedIn]); // Re-fetch projects if login status changes
 
-  const fetchData = async () => {
+  const fetchProjects = async () => {
     try {
-      const [projRes] = await Promise.all([fetch(`${API_BASE}/projects`)]);
-      setProjects(await projRes.json());
-
-      if (isLoggedIn) {
-        const [userRes, permRes] = await Promise.all([
-          fetch(`${API_BASE}/users`, {
-            headers: { Authorization: `Bearer ${token}` },
-          }),
-          fetch(`${API_BASE}/permissions`, {
-            headers: { Authorization: `Bearer ${token}` },
-          }),
-        ]);
-        setUsers(await userRes.json());
-        setPermissions(await permRes.json());
+      const res = await fetch(`${API_BASE}/projects`);
+      if (res.ok) {
+        setProjects(await res.json());
       }
     } catch (e) {
-      console.error("Failed to fetch data", e);
+      console.error("Failed to fetch projects", e);
     }
   };
 
@@ -62,55 +43,11 @@ export default function Home() {
     });
     if (res.ok) {
       setNewProjectName("");
-      fetchData();
+      fetchProjects();
     } else {
       const data = await res.json();
       alert(`Failed to create project: ${data.message || res.statusText}`);
     }
-  };
-
-  const addUser = async (e: React.FormEvent) => {
-    e.preventDefault();
-    await fetch(`${API_BASE}/users`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        name: newUserName,
-        email: newUserEmail,
-        role: "user",
-      }),
-    });
-    setNewUserName("");
-    setNewUserEmail("");
-    fetchData();
-  };
-
-  const deleteUser = async (id: string) => {
-    await fetch(`${API_BASE}/users/${id}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    fetchData();
-  };
-
-  const setPermission = async (e: React.FormEvent) => {
-    e.preventDefault();
-    await fetch(`${API_BASE}/permissions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        user_id: permUserId,
-        project: permProject,
-        access: permAccess,
-      }),
-    });
-    fetchData();
   };
 
   return (
@@ -123,10 +60,12 @@ export default function Home() {
             {projects.map((p) => (
               <div
                 key={p.name}
-                className="overflow-hidden rounded-lg bg-white shadow"
+                className="overflow-hidden rounded-lg bg-white shadow transition-shadow hover:shadow-md"
               >
                 <div className="p-6">
-                  <h3 className="text-lg font-medium text-gray-900">{p.name}</h3>
+                  <h3 className="text-lg font-medium text-gray-900">
+                    {p.name}
+                  </h3>
                   <p className="mt-2 text-sm text-gray-500">
                     A project repository
                   </p>
@@ -141,10 +80,15 @@ export default function Home() {
                 </div>
               </div>
             ))}
+            {projects.length === 0 && (
+              <p className="col-span-full py-12 text-center text-gray-500">
+                No projects found.
+              </p>
+            )}
           </div>
 
           {isLoggedIn && (
-            <div className="mb-8 rounded-lg bg-white p-6 shadow">
+            <div className="rounded-lg bg-white p-6 shadow">
               <h2 className="mb-4 text-xl font-semibold text-gray-900">
                 Create New Project
               </h2>
@@ -159,181 +103,12 @@ export default function Home() {
                 />
                 <button
                   type="submit"
-                  className="rounded-md bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700 focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:outline-none"
+                  className="rounded-md bg-indigo-600 px-4 py-2 text-white transition-colors hover:bg-indigo-700 focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:outline-none"
                 >
-                  Create
+                  Create Project
                 </button>
               </form>
             </div>
-          )}
-
-          {isLoggedIn && (
-            <>
-              <div className="mb-8 rounded-lg bg-white p-6 shadow">
-                <h2 className="mb-4 text-xl font-semibold text-gray-900">
-                  Users
-                </h2>
-                <div className="overflow-x-auto">
-                  <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th className="px-6 py-3 text-left text-xs font-medium tracking-wider text-gray-500 uppercase">
-                          Name
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium tracking-wider text-gray-500 uppercase">
-                          Email
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium tracking-wider text-gray-500 uppercase">
-                          Actions
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-200 bg-white">
-                      {users.map((u) => (
-                        <tr key={u.id}>
-                          <td className="px-6 py-4 text-sm font-medium whitespace-nowrap text-gray-900">
-                            {u.name}
-                          </td>
-                          <td className="px-6 py-4 text-sm whitespace-nowrap text-gray-500">
-                            {u.email}
-                          </td>
-                          <td className="px-6 py-4 text-sm whitespace-nowrap text-gray-500">
-                            <button
-                              onClick={() => deleteUser(u.id)}
-                              className="text-red-600 hover:text-red-900"
-                            >
-                              Delete
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                <h3 className="mt-6 mb-4 text-lg font-medium text-gray-900">
-                  Add User
-                </h3>
-                <form onSubmit={addUser} className="flex gap-4">
-                  <input
-                    type="text"
-                    placeholder="Name"
-                    value={newUserName}
-                    onChange={(e) => setNewUserName(e.target.value)}
-                    required
-                    className="flex-1 rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 focus:outline-none"
-                  />
-                  <input
-                    type="email"
-                    placeholder="Email"
-                    value={newUserEmail}
-                    onChange={(e) => setNewUserEmail(e.target.value)}
-                    required
-                    className="flex-1 rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 focus:outline-none"
-                  />
-                  <button
-                    type="submit"
-                    className="rounded-md bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700 focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:outline-none"
-                  >
-                    Add
-                  </button>
-                </form>
-              </div>
-
-              <div className="rounded-lg bg-white p-6 shadow">
-                <h2 className="mb-4 text-xl font-semibold text-gray-900">
-                  Permissions
-                </h2>
-                <div className="mb-6 overflow-x-auto">
-                  <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th className="px-6 py-3 text-left text-xs font-medium tracking-wider text-gray-500 uppercase">
-                          User
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium tracking-wider text-gray-500 uppercase">
-                          Project
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium tracking-wider text-gray-500 uppercase">
-                          Access
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-200 bg-white">
-                      {permissions.map((p, i) => {
-                        const user = users.find((u) => u.id === p.user_id);
-                        const project = projects.find(
-                          (proj) => proj.name === p.project,
-                        );
-                        const isOwner =
-                          project && user && project.owner_id === user.id;
-                        const access = isOwner ? "owner" : p.access;
-                        return (
-                          <tr key={i}>
-                            <td className="px-6 py-4 text-sm font-medium whitespace-nowrap text-gray-900">
-                              {user ? user.name : p.user_id}
-                            </td>
-                            <td className="px-6 py-4 text-sm whitespace-nowrap text-gray-500">
-                              {p.project}
-                            </td>
-                            <td className="px-6 py-4 text-sm whitespace-nowrap text-gray-500">
-                              {access}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-
-                <h3 className="mb-4 text-lg font-medium text-gray-900">
-                  Set Permission
-                </h3>
-                <form onSubmit={setPermission} className="flex gap-4">
-                  <select
-                    value={permUserId}
-                    onChange={(e) => setPermUserId(e.target.value)}
-                    required
-                    className="rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 focus:outline-none"
-                  >
-                    <option value="">Select User</option>
-                    {users.map((u) => (
-                      <option key={u.id} value={u.id}>
-                        {u.name}
-                      </option>
-                    ))}
-                  </select>
-                  <select
-                    value={permProject}
-                    onChange={(e) => setPermProject(e.target.value)}
-                    required
-                    className="rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 focus:outline-none"
-                  >
-                    <option value="">Select Project</option>
-                    {projects.map((p) => (
-                      <option key={p.name} value={p.name}>
-                        {p.name}
-                      </option>
-                    ))}
-                  </select>
-                  <select
-                    value={permAccess}
-                    onChange={(e) => setPermAccess(e.target.value)}
-                    className="rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 focus:outline-none"
-                  >
-                    <option value="read">Read</option>
-                    <option value="write">Write</option>
-                    <option value="admin">Admin</option>
-                  </select>
-                  <button
-                    type="submit"
-                    className="rounded-md bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700 focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:outline-none"
-                  >
-                    Set
-                  </button>
-                </form>
-              </div>
-            </>
           )}
         </div>
       </div>

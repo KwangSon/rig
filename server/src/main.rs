@@ -153,7 +153,10 @@ async fn main() {
     let api_routes = Router::new()
         .route("/health", get(health_handler))
         .route("/projects", get(get_projects_handler))
-        .route("/projects/{name}", delete(delete_project_handler))
+        .route(
+            "/projects/{name}",
+            get(get_project_handler).delete(delete_project_handler),
+        )
         .route("/create_project", post(create_project_handler))
         .route(
             "/users",
@@ -166,7 +169,7 @@ async fn main() {
         )
         .route("/register", post(users::register_handler))
         .route("/login", post(users::login_handler))
-        .route("/me", get(users::me_handler))
+        .route("/users/me", get(users::me_handler))
         .route("/{project}/index.json", get(artifacts::get_index_handler))
         .route(
             "/{project}/artifacts",
@@ -423,6 +426,24 @@ async fn create_project_handler(
             }),
         ),
     }
+}
+
+// GET /projects/{name}
+async fn get_project_handler(
+    State(combined): State<CombinedState>,
+    Path(name): Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let project = sqlx::query("SELECT name, owner_id FROM projects WHERE name = $1")
+        .bind(&name)
+        .fetch_optional(&combined.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    Ok(Json(serde_json::json!({
+        "name": project.get::<String, _>("name"),
+        "owner_id": project.get::<Uuid, _>("owner_id")
+    })))
 }
 
 // DELETE /projects/{name}
