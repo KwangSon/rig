@@ -66,11 +66,6 @@ enum Commands {
     },
     /// Shows the working tree status
     Status,
-    /// Shows the revision history of an artifact
-    Blame {
-        /// The path to the artifact to blame
-        path: PathBuf,
-    },
     /// Moves or renames an artifact
     Mv {
         /// The source path of the artifact to move
@@ -83,6 +78,15 @@ enum Commands {
         /// The path to the artifact to add
         path: PathBuf,
     },
+    /// Lists, creates, or deletes branches
+    Branch,
+    /// Switches to a different branch
+    Checkout {
+        /// The name of the branch to checkout
+        branch: String,
+    },
+    /// Stashes changes for temporary storage
+    Stash,
     /// Locks an artifact to prevent others from editing
     Lock {
         /// The path to the artifact to lock
@@ -184,12 +188,6 @@ async fn main() {
                 std::process::exit(1);
             }
         }
-        Commands::Blame { path } => {
-            if let Err(e) = commands::blame::run(path.clone()).await {
-                eprintln!("[error] Failed to blame: {}", e);
-                std::process::exit(1);
-            }
-        }
         Commands::Mv { src, dst } => {
             if let Err(e) = commands::mv::run(src.clone(), dst.clone()).await {
                 eprintln!("[error] Failed to move artifact: {}", e);
@@ -199,6 +197,24 @@ async fn main() {
         Commands::Add { path } => {
             if let Err(e) = commands::add::run(path).await {
                 eprintln!("[error] Failed to add: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Commands::Branch => {
+            if let Err(e) = commands::branch::run().await {
+                eprintln!("[error] Branch command failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Commands::Checkout { branch } => {
+            if let Err(e) = commands::checkout::run(branch).await {
+                eprintln!("[error] Checkout command failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Commands::Stash => {
+            if let Err(e) = commands::stash::run().await {
+                eprintln!("[error] Stash command failed: {}", e);
                 std::process::exit(1);
             }
         }

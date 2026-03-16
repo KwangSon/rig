@@ -34,12 +34,12 @@ pub async fn run(
 
     // Overrides from flags
     if let Some(ref r) = rev_arg {
-        if r.starts_with('#') {
-            if let Ok(rev) = r[1..].parse::<u32>() {
+        if let Some(stripped) = r.strip_prefix('#') {
+            if let Ok(rev) = stripped.parse::<u32>() {
                 requested_rev = Some(rev);
             }
-        } else if r.starts_with('@') {
-            requested_commit = Some(r[1..].to_string());
+        } else if let Some(stripped) = r.strip_prefix('@') {
+            requested_commit = Some(stripped.to_string());
         } else if let Ok(rev) = r.parse::<u32>() {
             requested_rev = Some(rev);
         }
