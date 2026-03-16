@@ -23,7 +23,7 @@ pub async fn run(url: &str, path: &Option<PathBuf>) -> Result<(), Box<dyn std::e
     let client = reqwest::Client::new();
 
     // 1. Check if server is alive
-    let health_url = format!("{}/health", base_url);
+    let health_url = format!("{}/api/v1/health", base_url);
     println!("-> Checking server status at {}...", health_url);
     let health_resp = client
         .get(&health_url)
@@ -41,7 +41,7 @@ pub async fn run(url: &str, path: &Option<PathBuf>) -> Result<(), Box<dyn std::e
     println!("   Server is alive.");
 
     // 2. Fetch metadata from the server
-    let metadata_url = format!("{}/{}/index.json", base_url, project_name);
+    let metadata_url = format!("{}/api/v1/{}/index.json", base_url, project_name);
     println!("-> Fetching metadata from {}...", metadata_url);
     let meta_resp = client
         .get(&metadata_url)

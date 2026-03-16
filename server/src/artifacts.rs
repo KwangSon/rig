@@ -584,15 +584,16 @@ pub async fn push_handler(
 
     // Process updated artifacts
     for (id, content_base64) in payload.updated_artifacts {
+        let bytes = general_purpose::STANDARD
+            .decode(&content_base64)
+            .unwrap_or_default();
+
         if let Some(artifact) = app_state.artifacts.get_mut(&id) {
             let new_rev = artifact.latest + 1;
             let artifact_dir = app_state.project_dir.join("artifacts").join(&id);
             fs::create_dir_all(&artifact_dir).ok();
 
             let rev_path = artifact_dir.join(format!("rev{}.blend", new_rev));
-            let bytes = general_purpose::STANDARD
-                .decode(&content_base64)
-                .unwrap_or_default();
             if fs::write(&rev_path, &bytes).is_err() {
                 continue;
             }
@@ -600,6 +601,26 @@ pub async fn push_handler(
             artifact.latest = new_rev;
             artifact.revisions.push(Revision::new(new_rev, &bytes));
             artifact.locked_by = None; // Auto-unlock on push
+        } else {
+            // New artifact created on client and pushed
+            println!("Creating new artifact '{}' during push", id);
+            let artifact_dir = app_state.project_dir.join("artifacts").join(&id);
+            fs::create_dir_all(&artifact_dir).ok();
+
+            let rev_path = artifact_dir.join("rev1.blend");
+            if fs::write(&rev_path, &bytes).is_err() {
+                continue;
+            }
+
+            app_state.artifacts.insert(
+                id.clone(),
+                Artifact {
+                    path: id.clone(),
+                    latest: 1,
+                    locked_by: None,
+                    revisions: vec![Revision::new(1, &bytes)],
+                },
+            );
         }
     }
 

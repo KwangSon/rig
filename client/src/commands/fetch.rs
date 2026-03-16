@@ -19,7 +19,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let client = reqwest::Client::new();
     let server_url = "http://localhost:3000";
-    let remote_index_url = format!("{}/{}/index.json", server_url, local_index.project);
+    let remote_index_url = format!("{}/api/v1/{}/index.json", server_url, local_index.project);
 
     println!("-> Fetching remote metadata from {}...", remote_index_url);
     let resp = client

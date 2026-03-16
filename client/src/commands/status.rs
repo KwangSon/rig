@@ -27,7 +27,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // 2. Fetch latest index.json from the server
     let client = reqwest::Client::new();
     let server_url = "http://localhost:3000"; // Assuming local server for now
-    let remote_index_url = format!("{}/{}/index.json", server_url, local_index.project);
+    let remote_index_url = format!("{}/api/v1/{}/index.json", server_url, local_index.project);
 
     println!("-> Fetching latest metadata from {}...", remote_index_url);
     let remote_resp = client

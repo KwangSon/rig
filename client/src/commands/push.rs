@@ -75,7 +75,7 @@ pub async fn run(message: Option<String>) -> Result<(), Box<dyn std::error::Erro
     }
 
     // 2. Send PushRequest to server
-    let push_url = format!("{}/{}/push", server_url, local_index.project);
+    let push_url = format!("{}/api/v1/{}/push", server_url, local_index.project);
     let payload = PushRequest {
         message: message.clone(),
         username: local_index
@@ -118,7 +118,7 @@ pub async fn run(message: Option<String>) -> Result<(), Box<dyn std::error::Erro
     local_index.latest_commit = new_hash;
 
     // Fetch latest index from server to synchronize artifact revisions
-    let remote_index_url = format!("{}/{}/index.json", server_url, local_index.project);
+    let remote_index_url = format!("{}/api/v1/{}/index.json", server_url, local_index.project);
     let remote_resp = client.get(&remote_index_url).send().await?;
     if remote_resp.status().is_success() {
         let remote_index: IndexFile = remote_resp.json().await?;

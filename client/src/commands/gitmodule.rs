@@ -53,7 +53,10 @@ pub async fn run(subcommand: &GitModuleCommands) -> Result<(), Box<dyn std::erro
                 .server_url
                 .as_ref()
                 .ok_or("Server URL not configured")?;
-            let api_url = format!("{}/{}/gitmodules/{}", server_url, index.project, path_str);
+            let api_url = format!(
+                "{}/api/v1/{}/gitmodules/{}",
+                server_url, index.project, path_str
+            );
 
             let resp = client.put(&api_url).json(&module).send().await?;
             if !resp.status().is_success() {
@@ -82,7 +85,10 @@ pub async fn run(subcommand: &GitModuleCommands) -> Result<(), Box<dyn std::erro
                 .server_url
                 .as_ref()
                 .ok_or("Server URL not configured")?;
-            let api_url = format!("{}/{}/gitmodules/{}", server_url, index.project, path_str);
+            let api_url = format!(
+                "{}/api/v1/{}/gitmodules/{}",
+                server_url, index.project, path_str
+            );
 
             let resp = client.put(&api_url).json(&module).send().await?;
             if !resp.status().is_success() {
