@@ -542,8 +542,7 @@ fn persist_index(app_state: &AppState) -> Result<(), String> {
 
 #[derive(Deserialize)]
 pub struct PushRequest {
-    pub message: String,
-    pub username: String,
+    pub commit: protocol::Commit,
     pub updated_artifacts: std::collections::HashMap<String, String>,
 }
 
@@ -563,7 +562,6 @@ pub async fn push_handler(
         }
     };
 
-    let mut latest_commit_hash = String::new();
     let mut commits_map = std::collections::HashMap::new();
 
     // Read index.json to get current state
@@ -571,10 +569,6 @@ pub async fn push_handler(
     if let Ok(index_content) = fs::read_to_string(&index_path)
         && let Ok(index_val) = serde_json::from_str::<serde_json::Value>(&index_content)
     {
-        latest_commit_hash = index_val["latest_commit"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
         if let Ok(c) = serde_json::from_value::<std::collections::HashMap<String, protocol::Commit>>(
             index_val["commits"].clone(),
         ) {
@@ -624,41 +618,15 @@ pub async fn push_handler(
         }
     }
 
-    // Create a new authoritative commit
-    let mut commit_artifacts = std::collections::HashMap::new();
-    for (id, artifact) in &app_state.artifacts {
-        commit_artifacts.insert(id.clone(), artifact.latest);
-    }
-
-    let parent = if latest_commit_hash.is_empty() {
-        None
-    } else {
-        Some(latest_commit_hash.clone())
-    };
-
-    // Hash the commit: SHA1(parent + message + author + artifacts_json)
-    let mut hasher = sha1::Sha1::new();
-    use sha1::Digest;
-    hasher.update(parent.as_deref().unwrap_or("").as_bytes());
-    hasher.update(payload.message.as_bytes());
-    hasher.update(payload.username.as_bytes());
-    hasher.update(serde_json::to_string(&commit_artifacts).unwrap().as_bytes());
-    let new_hash = format!("{:x}", hasher.finalize());
-
-    let new_commit = protocol::Commit {
-        hash: new_hash.clone(),
-        parent,
-        message: payload.message,
-        author: payload.username,
-        artifacts: commit_artifacts,
-    };
-
+    // Use the client's commit as the authoritative one
+    let new_commit = payload.commit;
+    let new_hash = new_commit.hash.clone();
     commits_map.insert(new_hash.clone(), new_commit.clone());
 
     // Update index.json
     let mut full_index: protocol::IndexFile = protocol::IndexFile {
         project: project.clone(),
-        server_url: None, // Will be filled from previous index if exists
+        server_url: None,
         username: None,
         latest_commit: new_hash.clone(),
         artifacts: app_state.artifacts.clone(),

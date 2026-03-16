@@ -7,12 +7,11 @@ use protocol::{Commit, IndexFile};
 
 #[derive(Serialize)]
 struct PushRequest {
-    message: String,
-    username: String,
-    updated_artifacts: HashMap<String, String>,
+    pub commit: Commit,
+    pub updated_artifacts: HashMap<String, String>,
 }
 
-pub async fn run(message: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run(_message_opt: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     let current_dir = std::env::current_dir()?;
     let rig_dir = current_dir.join(".rig");
     if !rig_dir.exists() {
@@ -26,20 +25,20 @@ pub async fn run(message: Option<String>) -> Result<(), Box<dyn std::error::Erro
     let mut local_index: IndexFile = serde_json::from_str(&index_content)
         .map_err(|e| format!("Failed to parse local index.json: {}", e))?;
 
-    // Determine message: prefer provided, fallback to last local commit message.
-    let message = if let Some(m) = message {
-        m
-    } else if local_index.latest_commit.is_empty() {
-        "Automatic push".to_string()
-    } else {
-        local_index
-            .commits
-            .get(&local_index.latest_commit)
-            .map(|c| c.message.clone())
-            .unwrap_or_else(|| "Automatic push".to_string())
-    };
+    if local_index.latest_commit.is_empty() {
+        return Err("No local commits to push. Run 'rig commit' first.".into());
+    }
 
-    println!("Preparing to push with message: '{}'", message);
+    let commit = local_index
+        .commits
+        .get(&local_index.latest_commit)
+        .ok_or("Latest commit not found locally")?
+        .clone();
+
+    println!(
+        "Preparing to push commit: {} ('{}')",
+        commit.hash, commit.message
+    );
 
     let server_url = local_index
         .server_url
@@ -69,19 +68,10 @@ pub async fn run(message: Option<String>) -> Result<(), Box<dyn std::error::Erro
         }
     }
 
-    if updated_artifacts.is_empty() {
-        println!("No local changes (writable files) found to push.");
-        return Ok(());
-    }
-
     // 2. Send PushRequest to server
     let push_url = format!("{}/api/v1/{}/push", server_url, local_index.project);
     let payload = PushRequest {
-        message: message.clone(),
-        username: local_index
-            .username
-            .clone()
-            .unwrap_or_else(|| "unknown".to_string()),
+        commit,
         updated_artifacts,
     };
 
@@ -96,33 +86,18 @@ pub async fn run(message: Option<String>) -> Result<(), Box<dyn std::error::Erro
 
     let authoritative_commit: Commit = resp.json().await?;
     let new_hash = authoritative_commit.hash.clone();
-    let new_parent = authoritative_commit.parent.clone().unwrap_or_default();
 
-    println!("-> Server created authoritative commit: {}", new_hash);
+    println!("-> Server accepted authoritative commit: {}", new_hash);
 
-    // 3. Update local state
-    // Synchronize local commits: remove any commits between the old latest_commit and the new parent
-    let mut current_to_remove = local_index.latest_commit.clone();
-    while !current_to_remove.is_empty() && current_to_remove != new_parent {
-        if let Some(c) = local_index.commits.remove(&current_to_remove) {
-            current_to_remove = c.parent.unwrap_or_default();
-        } else {
-            break;
-        }
-    }
-
-    // Update commits
-    local_index
-        .commits
-        .insert(new_hash.clone(), authoritative_commit.clone());
-    local_index.latest_commit = new_hash;
-
+    // 3. Synchronize local state with server
     // Fetch latest index from server to synchronize artifact revisions
     let remote_index_url = format!("{}/api/v1/{}/index.json", server_url, local_index.project);
     let remote_resp = client.get(&remote_index_url).send().await?;
     if remote_resp.status().is_success() {
         let remote_index: IndexFile = remote_resp.json().await?;
         local_index.artifacts = remote_index.artifacts;
+        local_index.commits = remote_index.commits;
+        local_index.latest_commit = remote_index.latest_commit;
     }
 
     // 4. Set files back to read-only

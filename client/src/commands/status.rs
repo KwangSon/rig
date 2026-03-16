@@ -1,10 +1,10 @@
 use protocol::IndexFile;
 use std::fs;
+use std::path::PathBuf;
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    println!("Running rig status...");
+    println!("Running rig status (local)...");
 
-    // Determine the current project root (where .rig is located)
     let current_dir = std::env::current_dir()?;
     let rig_dir = current_dir.join(".rig");
 
@@ -16,111 +16,125 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // 1. Read local .rig/index.json
-    let local_index_path = rig_dir.join("index.json");
-    let local_index_content = fs::read_to_string(&local_index_path)
+    let index_path = rig_dir.join("index.json");
+    let index_content = fs::read_to_string(&index_path)
         .map_err(|e| format!("Failed to read local index.json: {}", e))?;
-    let local_index: IndexFile = serde_json::from_str(&local_index_content)
+    let local_index: IndexFile = serde_json::from_str(&index_content)
         .map_err(|e| format!("Failed to parse local index.json: {}", e))?;
 
     println!("Project: {}", local_index.project);
 
-    // 2. Fetch latest index.json from the server
-    let client = reqwest::Client::new();
-    let server_url = "http://localhost:3000"; // Assuming local server for now
-    let remote_index_url = format!("{}/api/v1/{}/index.json", server_url, local_index.project);
+    // 2. Scan workspace for files
+    let mut untracked_files = Vec::new();
+    let mut modified_files = Vec::new(); // Writable files
+    let mut staged_files = Vec::new(); // Added but not in any commit yet
+    let mut committed_files = Vec::new(); // In index, in latest commit, but latest is 0 (not pushed)
 
-    println!("-> Fetching latest metadata from {}...", remote_index_url);
-    let remote_resp = client
-        .get(&remote_index_url)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to fetch remote index.json: {}", e))?;
-
-    if !remote_resp.status().is_success() {
-        return Err(format!(
-            "Failed to fetch remote index.json: Server responded with status {}",
-            remote_resp.status()
-        )
-        .into());
-    }
-    let remote_index_content = remote_resp.text().await?;
-    let remote_index: IndexFile = match serde_json::from_str(&remote_index_content) {
-        Ok(idx) => idx,
-        Err(e) => {
-            return Err(format!(
-                "Failed to parse remote index.json: {}\n\
-This project does not exist on the server. You must run the 'init' command in an empty folder and ensure the project is successfully created on the server before proceeding.",
-                e
-            ).into());
+    // Helper to scan recursively
+    fn collect_files(dir: &PathBuf, base: &PathBuf) -> Vec<PathBuf> {
+        let mut results = Vec::new();
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                if file_name == ".rig" || file_name.starts_with('.') || file_name == "target" {
+                    continue;
+                }
+                if path.is_dir() {
+                    results.extend(collect_files(&path, base));
+                } else {
+                    if let Ok(rel_path) = path.strip_prefix(base) {
+                        results.push(rel_path.to_path_buf());
+                    }
+                }
+            }
         }
-    };
-    println!("   Remote metadata fetched successfully.");
+        results
+    }
 
-    // 3. Compare local and server state
-    let mut local_files: Vec<String> = Vec::new();
-    let mut missing_files: Vec<String> = Vec::new();
-    let mut outdated_files: Vec<(String, u32, u32)> = Vec::new(); // (artifact_name, local_rev, server_rev)
+    let latest_commit = local_index.commits.get(&local_index.latest_commit);
+    let all_workspace_files = collect_files(&current_dir, &current_dir);
 
-    for (artifact_name, remote_artifact_details) in &remote_index.artifacts {
-        let artifact_path = current_dir.join(&remote_artifact_details.path);
-        if artifact_path.exists() {
-            // File exists locally
-            local_files.push(artifact_name.clone());
+    // 3. Compare with local index
+    for rel_path in &all_workspace_files {
+        let path_str = rel_path.to_string_lossy().to_string();
 
-            // Check if outdated
-            if let Some(local_artifact_details) = local_index.artifacts.get(artifact_name) {
-                // Here, we're comparing based on the `latest` field in the index.json.
-                // In a real scenario, we might want to compare hashes of the actual files
-                // or specific revision information. For this task, `latest` comparison is sufficient.
-                if local_artifact_details.latest < remote_artifact_details.latest {
-                    outdated_files.push((
-                        artifact_name.clone(),
-                        local_artifact_details.latest,
-                        remote_artifact_details.latest,
-                    ));
+        if let Some(artifact) = local_index.artifacts.get(&path_str) {
+            if artifact.latest == 0 {
+                // If it's in the latest commit, it's "committed but not pushed"
+                let in_commit =
+                    latest_commit.map_or(false, |c| c.artifacts.contains_key(&path_str));
+                if in_commit {
+                    committed_files.push(path_str);
+                } else {
+                    staged_files.push(path_str);
                 }
             } else {
-                // This case implies a local file exists but isn't in local_index.json,
-                // which shouldn't happen if the local_index.json accurately reflects the cloned state.
-                // For now, we'll assume local_index.json is authoritative for local knowledge.
+                // Tracked on server - check if modified (writable)
+                let full_path = current_dir.join(rel_path);
+                if let Ok(metadata) = fs::metadata(full_path) {
+                    if !metadata.permissions().readonly() {
+                        modified_files.push(path_str);
+                    }
+                }
             }
         } else {
-            // File does not exist locally, but is on server
-            missing_files.push(artifact_name.clone());
+            untracked_files.push(path_str);
         }
     }
 
-    // Output the results
-    println!("\nLocal files:");
-    if local_files.is_empty() {
-        println!("  (none)");
-    } else {
-        for file in local_files {
-            let rev = local_index.artifacts.get(&file).map_or(0, |a| a.latest);
-            println!("  {} (rev {})", file, rev);
+    // Check for missing files
+    let mut missing_files = Vec::new();
+    for (id, artifact) in &local_index.artifacts {
+        let full_path = current_dir.join(&artifact.path);
+        if !full_path.exists() {
+            missing_files.push(id.clone());
         }
     }
 
-    println!("\nMissing files:");
-    if missing_files.is_empty() {
-        println!("  (none)");
-    } else {
-        for file in missing_files {
-            let rev = remote_index.artifacts.get(&file).map_or(0, |a| a.latest);
-            println!("  {} (rev {})", file, rev);
+    // Output results
+    if !staged_files.is_empty() {
+        println!("\nChanges to be committed (staged):");
+        for file in &staged_files {
+            println!("  (new)      {}", file);
         }
     }
 
-    println!("\nOutdated files:");
-    if outdated_files.is_empty() {
-        println!("  (none)");
-    } else {
-        for (file, local_rev, server_rev) in outdated_files {
-            println!(
-                "  {} (local: rev{}, server: rev{})",
-                file, local_rev, server_rev
-            );
+    if !committed_files.is_empty() {
+        println!("\nChanges committed but not pushed:");
+        for file in &committed_files {
+            println!("  (committed){}", file);
         }
+    }
+
+    if !modified_files.is_empty() {
+        println!("\nChanges not staged for commit (modified):");
+        for file in &modified_files {
+            println!("  (modified) {}", file);
+        }
+    }
+
+    if !untracked_files.is_empty() {
+        println!("\nUntracked files:");
+        for file in &untracked_files {
+            println!("             {}", file);
+        }
+    }
+
+    if !missing_files.is_empty() {
+        println!("\nMissing files:");
+        for file in &missing_files {
+            println!("  (missing)  {}", file);
+        }
+    }
+
+    if staged_files.is_empty()
+        && committed_files.is_empty()
+        && modified_files.is_empty()
+        && untracked_files.is_empty()
+        && missing_files.is_empty()
+    {
+        println!("\nNothing to commit, working tree clean.");
     }
 
     Ok(())
