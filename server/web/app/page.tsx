@@ -122,17 +122,17 @@ export default function Home() {
           <div className="mb-8 grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
             {projects.map((p) => (
               <div
-                key={p}
+                key={p.name}
                 className="overflow-hidden rounded-lg bg-white shadow"
               >
                 <div className="p-6">
-                  <h3 className="text-lg font-medium text-gray-900">{p}</h3>
+                  <h3 className="text-lg font-medium text-gray-900">{p.name}</h3>
                   <p className="mt-2 text-sm text-gray-500">
                     A project repository
                   </p>
                   <div className="mt-4">
                     <a
-                      href={`/projects/${p}`}
+                      href={`/projects/${p.name}`}
                       className="text-sm font-medium text-indigo-600 hover:text-indigo-500"
                     >
                       View project →

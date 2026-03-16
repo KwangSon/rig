@@ -30,7 +30,7 @@ pub fn decode_token(token: &str) -> Result<Claims, jsonwebtoken::errors::Error> 
     .map(|data| data.claims)
 }
 #[derive(Serialize, Deserialize)]
-struct Claims {
+pub struct Claims {
     pub sub: String, // user id
     exp: u64,
 }
@@ -207,7 +207,7 @@ pub async fn register_handler(
 
     // Generate JWT
     let claims = Claims {
-        sub: user.id,
+        sub: user.id.to_string(),
         exp: (std::time::SystemTime::now() + std::time::Duration::from_secs(24 * 60 * 60))
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -252,7 +252,7 @@ pub async fn login_handler(
 
     // Generate JWT
     let claims = Claims {
-        sub: user.id,
+        sub: user.id.to_string(),
         exp: (std::time::SystemTime::now() + std::time::Duration::from_secs(24 * 60 * 60))
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
