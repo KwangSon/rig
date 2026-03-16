@@ -3,7 +3,7 @@ use axum::{
     extract::{FromRef, Path, State},
     http::{HeaderMap, Method, StatusCode},
     response::Json,
-    routing::{delete, get, post, put},
+    routing::{delete, get, post},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -125,10 +125,10 @@ async fn main() {
         .collect::<Vec<String>>();
     for name in project_names {
         let project_dir = base_dir.join(&name);
-        if project_dir.exists() {
-            if let Ok(app_state) = load_project_state(&project_dir) {
-                projects.insert(name, app_state);
-            }
+        if project_dir.exists()
+            && let Ok(app_state) = load_project_state(&project_dir)
+        {
+            projects.insert(name, app_state);
         }
     }
 
@@ -203,6 +203,9 @@ async fn main() {
     let app = Router::new()
         .nest("/api/v1", api_routes)
         .layer(cors)
+        .layer(tower_http::limit::RequestBodyLimitLayer::new(
+            1024 * 1024 * 1024,
+        )) // 1GB limit
         .fallback_service(ServeDir::new(&base_dir));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
@@ -231,6 +234,7 @@ fn load_project_state(project_dir: &StdPath) -> Result<AppState, String> {
                 .map(|r| protocol::Revision {
                     rev: r["rev"].as_u64().unwrap_or(0) as u32,
                     hash: r["hash"].as_str().unwrap_or("").to_string(),
+                    compressed: r["compressed"].as_bool().unwrap_or(false),
                 })
                 .collect();
             artifacts.insert(
@@ -301,12 +305,12 @@ async fn create_project_handler(
         .and_then(|h| h.to_str().ok())
         .and_then(|h| h.strip_prefix("Bearer "))
         .ok_or_else(|| {
-            return (
+            (
                 StatusCode::UNAUTHORIZED,
                 Json(CreateProjectResponse {
                     message: "Authorization required".to_string(),
                 }),
-            );
+            )
         })
         .unwrap();
 
@@ -339,10 +343,10 @@ async fn create_project_handler(
     }
 
     // Insert into DB
-    let project_id =
+    let _project_id =
         match sqlx::query("INSERT INTO projects (name, owner_id) VALUES ($1, $2) RETURNING id")
             .bind(&payload.name)
-            .bind(&owner_id)
+            .bind(owner_id)
             .fetch_one(&combined.db)
             .await
         {
@@ -359,7 +363,7 @@ async fn create_project_handler(
 
     // Insert admin permission for owner
     if sqlx::query("INSERT INTO permissions (user_id, project, access) VALUES ($1, $2, 'admin')")
-        .bind(&owner_id)
+        .bind(owner_id)
         .bind(&payload.name)
         .execute(&combined.db)
         .await
@@ -479,7 +483,7 @@ async fn delete_project_handler(
         .map(|row| row.get::<Uuid, _>("owner_id") == user_id)
         .unwrap_or(false);
     let is_admin = sqlx::query("SELECT role FROM users WHERE id = $1")
-        .bind(&user_id)
+        .bind(user_id)
         .fetch_optional(&combined.db)
         .await
         .unwrap_or(None)
@@ -502,7 +506,7 @@ async fn delete_project_handler(
 
     // Delete filesystem directory
     let project_dir = PathBuf::from("server/examples").join(&name);
-    if let Err(_) = fs::remove_dir_all(&project_dir) {
+    if fs::remove_dir_all(&project_dir).is_err() {
         // Log error but don't fail
     }
 

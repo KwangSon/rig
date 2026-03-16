@@ -23,14 +23,20 @@ pub struct Permission {
 pub struct Revision {
     pub rev: u32,
     pub hash: String,
+    #[serde(default)]
+    pub compressed: bool,
 }
 
 impl Revision {
-    pub fn new(rev: u32, content: &[u8]) -> Self {
+    pub fn new(rev: u32, content: &[u8], compressed: bool) -> Self {
         let mut hasher = Sha1::new();
         hasher.update(content);
         let hash = format!("{:x}", hasher.finalize());
-        Revision { rev, hash }
+        Revision {
+            rev,
+            hash,
+            compressed,
+        }
     }
 }
 

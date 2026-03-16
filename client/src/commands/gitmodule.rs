@@ -1,7 +1,6 @@
 use crate::GitModuleCommands;
 use protocol::{GitModule, IndexFile};
 use std::fs;
-use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub async fn run(subcommand: &GitModuleCommands) -> Result<(), Box<dyn std::error::Error>> {

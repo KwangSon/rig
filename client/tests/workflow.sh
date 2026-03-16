@@ -2,16 +2,25 @@
 set -e
 
 # Setup paths
-# We'll use the current working directory for test folders
 ROOT_DIR="$(pwd)"
 RIG_BIN="$ROOT_DIR/target/debug/client"
-PROJECT_NAME="full_workflow_test_project"
+PROJECT_NAME="full_workflow_test_$(date +%s)"
 CLONE_DIR="full_workflow_cloned_project"
 SERVER_URL="http://localhost:3000"
+API_URL="$SERVER_URL/api/v1"
 
-# Cleanup function to be called on EXIT
+# Credentials (from setup.sh)
+ADMIN_EMAIL="admin@example.com"
+ADMIN_PASSWORD="password"
+
+# Cleanup function
 function cleanup {
-    echo -e "\n--- Cleaning up test directories ---"
+    echo -e "\n--- Cleaning up ---"
+    if [ ! -z "$AUTH_TOKEN" ]; then
+        echo "Deleting test project '$PROJECT_NAME' via API..."
+        curl -s -X DELETE "$API_URL/projects/$PROJECT_NAME" \
+             -H "Authorization: Bearer $AUTH_TOKEN" > /dev/null
+    fi
     cd "$ROOT_DIR"
     rm -rf "$PROJECT_NAME" "$CLONE_DIR"
 }
@@ -23,28 +32,53 @@ if [ ! -f "$RIG_BIN" ]; then
     exit 1
 fi
 
-echo "=== Starting Full Workflow Test ==="
+echo "=== Starting Automated Full Workflow Test ==="
 
-# 1. Initialize project
-echo -e "\n--- 1. Initializing project: $PROJECT_NAME ---"
-mkdir -p "$PROJECT_NAME"
+# 0. Login to get Token
+echo "-> Logging in as admin..."
+LOGIN_RESP=$(curl -s -X POST "$API_URL/login" \
+    -H "Content-Type: application/json" \
+    -d "{\"email\":\"$ADMIN_EMAIL\", \"password\":\"$ADMIN_PASSWORD\"}")
+
+AUTH_TOKEN=$(echo $LOGIN_RESP | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+
+if [ -z "$AUTH_TOKEN" ]; then
+    echo "Error: Failed to login and get auth token."
+    echo "Response: $LOGIN_RESP"
+    exit 1
+fi
+
+# 1. Create project via API
+echo "-> Creating project '$PROJECT_NAME' via API..."
+CREATE_RESP=$(curl -s -X POST "$API_URL/create_project" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $AUTH_TOKEN" \
+    -d "{\"name\":\"$PROJECT_NAME\"}")
+
+if [[ $CREATE_RESP == *"error"* ]]; then
+    echo "Error: Failed to create project."
+    echo "Response: $CREATE_RESP"
+    exit 1
+fi
+
+# 2. Clone the new project
+echo -e "\n--- 1. Cloning project: $PROJECT_NAME ---"
+"$RIG_BIN" clone "$SERVER_URL/$PROJECT_NAME" "$PROJECT_NAME" --username "Jone"
 cd "$PROJECT_NAME"
-# Now prompts for server URL and username
-printf "\nJone <jone@tt.com>\n" | "$RIG_BIN" init
 
-# 2. Add and Push first revision
+# 3. Add and Push first revision
 echo -e "\n--- 2. Adding first artifact ---"
 echo "Revision 1 content" > file1.txt
 "$RIG_BIN" add file1.txt
 "$RIG_BIN" commit -m "Initial commit with file1.txt"
 "$RIG_BIN" push
 
-# 3. Clone project into a new directory
+# 4. Clone project into a new directory
 cd "$ROOT_DIR"
 echo -e "\n--- 3. Cloning project into $CLONE_DIR ---"
-printf "CloneUser\n" | "$RIG_BIN" clone "$SERVER_URL/$PROJECT_NAME" "$CLONE_DIR"
+"$RIG_BIN" clone "$SERVER_URL/$PROJECT_NAME" "$CLONE_DIR" --username "CloneUser"
 
-# 4. Pull and Modify from Clone
+# 5. Pull and Modify from Clone
 cd "$CLONE_DIR"
 echo -e "\n--- 4. Pulling and modifying from clone ---"
 "$RIG_BIN" pull file1.txt
@@ -56,17 +90,20 @@ echo "Revision 2 content from clone" >> file1.txt
 "$RIG_BIN" commit -m "Revision 2 from cloned repository"
 "$RIG_BIN" push
 
-# 5. Verify History (Log & Blame)
+# 6. Verify History (Log & Blame)
 echo -e "\n--- 5. Verifying history in clone ---"
 "$RIG_BIN" log
 echo ""
 "$RIG_BIN" blame file1.txt
 
-# 6. Synchronize Original Repository
+# 7. Synchronize Original Repository
 cd "$ROOT_DIR/$PROJECT_NAME"
 echo -e "\n--- 6. Synchronizing original repository ---"
+"$RIG_BIN" fetch
 "$RIG_BIN" pull file1.txt
 echo "Final content in original repo:"
 cat file1.txt
 
 echo -e "\n=== Full Workflow Test Completed Successfully! ==="
+echo "You can now check the project '$PROJECT_NAME' in the Web UI."
+read -p "Press [Enter] to delete the test project and cleanup local files, or Ctrl+C to keep them..."

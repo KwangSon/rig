@@ -42,10 +42,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 if path.is_dir() {
                     results.extend(collect_files(&path, base));
-                } else {
-                    if let Ok(rel_path) = path.strip_prefix(base) {
-                        results.push(rel_path.to_path_buf());
-                    }
+                } else if let Ok(rel_path) = path.strip_prefix(base) {
+                    results.push(rel_path.to_path_buf());
                 }
             }
         }
@@ -62,8 +60,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(artifact) = local_index.artifacts.get(&path_str) {
             if artifact.latest == 0 {
                 // If it's in the latest commit, it's "committed but not pushed"
-                let in_commit =
-                    latest_commit.map_or(false, |c| c.artifacts.contains_key(&path_str));
+                let in_commit = latest_commit.is_some_and(|c| c.artifacts.contains_key(&path_str));
                 if in_commit {
                     committed_files.push(path_str);
                 } else {
@@ -72,10 +69,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 // Tracked on server - check if modified (writable)
                 let full_path = current_dir.join(rel_path);
-                if let Ok(metadata) = fs::metadata(full_path) {
-                    if !metadata.permissions().readonly() {
-                        modified_files.push(path_str);
-                    }
+                if fs::metadata(full_path).is_ok_and(|m| !m.permissions().readonly()) {
+                    modified_files.push(path_str);
                 }
             }
         } else {

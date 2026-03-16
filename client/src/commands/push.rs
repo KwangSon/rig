@@ -1,14 +1,17 @@
-use base64::{Engine as _, engine::general_purpose};
+use flate2::Compression;
+use flate2::write::GzEncoder;
+use reqwest::multipart;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
 
 use protocol::{Commit, IndexFile};
 
 #[derive(Serialize)]
-struct PushRequest {
+struct PushMetadata {
     pub commit: Commit,
-    pub updated_artifacts: HashMap<String, String>,
+    pub artifact_compression: HashMap<String, bool>, // id -> is_compressed
 }
 
 pub async fn run(_message_opt: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
@@ -46,10 +49,14 @@ pub async fn run(_message_opt: Option<String>) -> Result<(), Box<dyn std::error:
         .ok_or("Server URL not configured")?;
     let client = reqwest::Client::new();
 
-    let mut updated_artifacts = HashMap::new();
+    // 1. Prepare Multipart Form
+    let mut form = multipart::Form::new();
+    let mut artifact_compression = HashMap::new();
     let mut artifact_paths = Vec::new();
 
-    // 1. Collect all modified (writable) artifacts
+    // Compression threshold (1MB)
+    const COMPRESSION_THRESHOLD: usize = 1024 * 1024;
+
     for (artifact_id, artifact_details) in &local_index.artifacts {
         let local_path = current_dir.join(&artifact_details.path);
         if !local_path.exists() {
@@ -58,25 +65,55 @@ pub async fn run(_message_opt: Option<String>) -> Result<(), Box<dyn std::error:
 
         let metadata = fs::metadata(&local_path)?;
         if !metadata.permissions().readonly() {
-            println!("-> Found modified artifact: {}", artifact_id);
-            let file_data = fs::read(&local_path)?;
-            updated_artifacts.insert(
-                artifact_id.clone(),
-                general_purpose::STANDARD.encode(&file_data),
-            );
+            println!("-> Processing artifact for upload: {}", artifact_id);
+            let mut file_data = fs::read(&local_path)?;
+            let mut is_compressed = false;
+
+            // Compress if large enough
+            if file_data.len() > COMPRESSION_THRESHOLD {
+                print!(
+                    "   Compressing {} ({} bytes)... ",
+                    artifact_id,
+                    file_data.len()
+                );
+                let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+                encoder.write_all(&file_data)?;
+                let compressed_data = encoder.finish()?;
+                println!("done. ({} bytes)", compressed_data.len());
+                file_data = compressed_data;
+                is_compressed = true;
+            }
+
+            artifact_compression.insert(artifact_id.clone(), is_compressed);
+
+            // Add to multipart form as a file part
+            let part = multipart::Part::bytes(file_data).file_name(artifact_id.clone());
+            form = form.part(format!("file_{}", artifact_id), part);
+
             artifact_paths.push(local_path);
         }
     }
 
+    if artifact_compression.is_empty() {
+        println!("No local changes found to push.");
+        return Ok(());
+    }
+
+    // Add metadata part
+    let metadata = PushMetadata {
+        commit,
+        artifact_compression,
+    };
+    form = form.part(
+        "metadata",
+        multipart::Part::text(serde_json::to_string(&metadata)?),
+    );
+
     // 2. Send PushRequest to server
     let push_url = format!("{}/api/v1/{}/push", server_url, local_index.project);
-    let payload = PushRequest {
-        commit,
-        updated_artifacts,
-    };
+    println!("-> Sending push request (multipart) to server...");
 
-    println!("-> Sending push request to server...");
-    let resp = client.post(&push_url).json(&payload).send().await?;
+    let resp = client.post(&push_url).multipart(form).send().await?;
     let status = resp.status();
 
     if !status.is_success() {
@@ -85,12 +122,12 @@ pub async fn run(_message_opt: Option<String>) -> Result<(), Box<dyn std::error:
     }
 
     let authoritative_commit: Commit = resp.json().await?;
-    let new_hash = authoritative_commit.hash.clone();
+    println!(
+        "-> Server accepted authoritative commit: {}",
+        authoritative_commit.hash
+    );
 
-    println!("-> Server accepted authoritative commit: {}", new_hash);
-
-    // 3. Synchronize local state with server
-    // Fetch latest index from server to synchronize artifact revisions
+    // 3. Synchronize local state
     let remote_index_url = format!("{}/api/v1/{}/index.json", server_url, local_index.project);
     let remote_resp = client.get(&remote_index_url).send().await?;
     if remote_resp.status().is_success() {
@@ -102,9 +139,10 @@ pub async fn run(_message_opt: Option<String>) -> Result<(), Box<dyn std::error:
 
     // 4. Set files back to read-only
     for path in artifact_paths {
-        let mut perms = fs::metadata(&path)?.permissions();
-        perms.set_readonly(true);
-        fs::set_permissions(&path, perms)?;
+        if let Ok(mut perms) = fs::metadata(&path).map(|m| m.permissions()) {
+            perms.set_readonly(true);
+            let _ = fs::set_permissions(&path, perms);
+        }
     }
 
     // Persist local index

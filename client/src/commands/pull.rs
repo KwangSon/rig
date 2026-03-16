@@ -1,5 +1,7 @@
+use flate2::read::GzDecoder;
 use protocol::IndexFile;
 use std::fs;
+use std::io::Read;
 use std::path::PathBuf;
 
 pub async fn run(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
@@ -27,7 +29,10 @@ pub async fn run(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 
     // 2. Fetch latest index.json from the server
     let client = reqwest::Client::new();
-    let server_url = "http://localhost:3000"; // Assuming local server
+    let server_url = local_index
+        .server_url
+        .as_deref()
+        .unwrap_or("http://localhost:3000");
     let remote_index_url = format!("{}/api/v1/{}/index.json", server_url, local_index.project);
 
     println!("-> Fetching latest metadata from {}...", remote_index_url);
@@ -76,14 +81,26 @@ pub async fn run(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     for artifact_name in artifacts_to_pull {
         let artifact_details = &remote_index.artifacts[&artifact_name];
         let latest_rev = artifact_details.latest;
-        println!("-> Pulling {} (rev {})", artifact_name, latest_rev);
+
+        // Find compression info from revisions
+        let is_compressed = artifact_details
+            .revisions
+            .iter()
+            .find(|r| r.rev == latest_rev)
+            .map(|r| r.compressed)
+            .unwrap_or(false);
+
+        println!(
+            "-> Pulling {} (rev {}, compressed={})",
+            artifact_name, latest_rev, is_compressed
+        );
 
         // Determine filename based on extension
         let ext = std::path::Path::new(&artifact_name)
             .extension()
             .and_then(|s| s.to_str())
             .map(|s| format!(".{}", s))
-            .unwrap_or_else(|| "".to_string());
+            .unwrap_or_default();
         let filename = format!("rev{}{}", latest_rev, ext);
 
         // Download URL: /{project}/artifacts/{artifact_id}/{filename}
@@ -109,22 +126,34 @@ pub async fn run(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
             .into());
         }
 
-        let file_content = file_resp.bytes().await?;
+        let mut file_content = file_resp.bytes().await?.to_vec();
+
+        // Decompress if needed
+        if is_compressed {
+            print!("   Decompressing... ");
+            let mut decoder = GzDecoder::new(&file_content[..]);
+            let mut decoded_data = Vec::new();
+            decoder.read_to_end(&mut decoded_data)?;
+            file_content = decoded_data;
+            println!("done.");
+        }
 
         // Save to workspace root with path name
         let local_path = current_dir.join(&artifact_details.path);
 
-        // Ensure parent directories exist (for nested paths)
+        // Ensure parent directories exist
         if let Some(parent) = local_path.parent() {
             fs::create_dir_all(parent).ok();
         }
 
         // If file exists, make it writable first
         if local_path.exists() {
-            let mut perms = fs::metadata(&local_path)?.permissions();
-            #[allow(clippy::permissions_set_readonly_false)]
-            perms.set_readonly(false);
-            fs::set_permissions(&local_path, perms)?;
+            let _ = fs::metadata(&local_path).map(|m| {
+                let mut perms = m.permissions();
+                #[allow(clippy::permissions_set_readonly_false)]
+                perms.set_readonly(false);
+                let _ = fs::set_permissions(&local_path, perms);
+            });
         }
 
         fs::write(&local_path, &file_content)

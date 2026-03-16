@@ -56,6 +56,7 @@ pub async fn run(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
                 revisions: vec![Revision {
                     rev: 0,
                     hash: hash.clone(),
+                    compressed: false,
                 }],
             },
         );

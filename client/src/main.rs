@@ -31,6 +31,9 @@ enum Commands {
         url: String,
         /// The path to clone into. Defaults to the repository name.
         path: Option<PathBuf>,
+        /// Optional username for this repository
+        #[arg(short, long)]
+        username: Option<String>,
     },
     /// Fetches metadata from the remote repository without downloading files
     Fetch,
@@ -116,8 +119,12 @@ async fn main() {
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::Clone { url, path } => {
-            if let Err(e) = commands::clone::run(url, path).await {
+        Commands::Clone {
+            url,
+            path,
+            username,
+        } => {
+            if let Err(e) = commands::clone::run(url, path, username).await {
                 eprintln!("[error] Failed to clone repository: {}", e);
                 std::process::exit(1);
             }

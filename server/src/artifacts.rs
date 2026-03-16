@@ -58,7 +58,7 @@ fn get_rev_filename(id: &str, rev: u32) -> String {
         .extension()
         .and_then(|s| s.to_str())
         .map(|s| format!(".{}", s))
-        .unwrap_or_else(|| "".to_string());
+        .unwrap_or_default();
     format!("rev{}{}", rev, ext)
 }
 
@@ -114,7 +114,7 @@ pub async fn create_artifact_handler(
             path: payload.path.clone(),
             latest: 1,
             locked_by: None,
-            revisions: vec![Revision::new(1, &bytes)],
+            revisions: vec![Revision::new(1, &bytes, false)],
         },
     );
 
@@ -226,7 +226,9 @@ pub async fn create_revision_handler(
     }
 
     artifact.latest = new_rev;
-    artifact.revisions.push(Revision::new(new_rev, &bytes));
+    artifact
+        .revisions
+        .push(Revision::new(new_rev, &bytes, false));
 
     // Persist index.json (best-effort)
     if let Err(e) = persist_index(app_state) {
@@ -354,7 +356,7 @@ pub async fn unlock_handler(
                     .users
                     .iter()
                     .find(|u| u.name == payload.user)
-                    .map(|u| u.id.clone());
+                    .map(|u| u.id);
 
                 if let Some(uid) = user_id {
                     let is_global_admin = users_data
@@ -513,6 +515,10 @@ fn persist_index(app_state: &AppState) -> Result<(), String> {
                     "hash".to_string(),
                     serde_json::Value::String(r.hash.clone()),
                 );
+                m.insert(
+                    "compressed".to_string(),
+                    serde_json::Value::Bool(r.compressed),
+                );
                 serde_json::Value::Object(m)
             })
             .collect();
@@ -551,16 +557,18 @@ fn persist_index(app_state: &AppState) -> Result<(), String> {
     Ok(())
 }
 
+use axum::extract::Multipart;
+
 #[derive(Deserialize)]
-pub struct PushRequest {
+pub struct PushMetadata {
     pub commit: protocol::Commit,
-    pub updated_artifacts: std::collections::HashMap<String, String>,
+    pub artifact_compression: std::collections::HashMap<String, bool>,
 }
 
 pub async fn push_handler(
     Path(project): Path<String>,
     State(state): State<SharedState>,
-    Json(payload): Json<PushRequest>,
+    mut multipart: Multipart,
 ) -> (StatusCode, Json<serde_json::Value>) {
     let mut projects = state.lock().await;
     let app_state = match projects.get_mut(&project) {
@@ -573,25 +581,49 @@ pub async fn push_handler(
         }
     };
 
+    let mut metadata: Option<PushMetadata> = None;
+    let mut files_data: std::collections::HashMap<String, Vec<u8>> =
+        std::collections::HashMap::new();
+
+    // 1. Extract parts from multipart
+    while let Ok(Some(field)) = multipart.next_field().await {
+        let name = field.name().unwrap_or("").to_string();
+        if name == "metadata" {
+            let text = field.text().await.unwrap_or_default();
+            metadata = serde_json::from_str(&text).ok();
+        } else if name.starts_with("file_") {
+            let artifact_id = name.strip_prefix("file_").unwrap().to_string();
+            let data = field.bytes().await.unwrap_or_default();
+            files_data.insert(artifact_id, data.to_vec());
+        }
+    }
+
+    let payload = match metadata {
+        Some(m) => m,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Missing metadata in push"})),
+            );
+        }
+    };
+
     let mut commits_map = std::collections::HashMap::new();
 
     // Read index.json to get current state
     let index_path = app_state.project_dir.join("index.json");
     if let Ok(index_content) = fs::read_to_string(&index_path)
         && let Ok(index_val) = serde_json::from_str::<serde_json::Value>(&index_content)
-    {
-        if let Ok(c) = serde_json::from_value::<std::collections::HashMap<String, protocol::Commit>>(
+        && let Ok(c) = serde_json::from_value::<std::collections::HashMap<String, protocol::Commit>>(
             index_val["commits"].clone(),
-        ) {
-            commits_map = c;
-        }
+        )
+    {
+        commits_map = c;
     }
 
-    // Process updated artifacts
-    for (id, content_base64) in payload.updated_artifacts {
-        let bytes = general_purpose::STANDARD
-            .decode(&content_base64)
-            .unwrap_or_default();
+    // 2. Process updated artifacts
+    for (id, bytes) in files_data {
+        let is_compressed = *payload.artifact_compression.get(&id).unwrap_or(&false);
 
         if let Some(artifact) = app_state.artifacts.get_mut(&id) {
             let new_rev = artifact.latest + 1;
@@ -605,11 +637,16 @@ pub async fn push_handler(
             }
 
             artifact.latest = new_rev;
-            artifact.revisions.push(Revision::new(new_rev, &bytes));
+            artifact
+                .revisions
+                .push(Revision::new(new_rev, &bytes, is_compressed));
             artifact.locked_by = None; // Auto-unlock on push
         } else {
-            // New artifact created on client and pushed
-            println!("Creating new artifact '{}' during push", id);
+            // New artifact
+            println!(
+                "Creating new artifact '{}' during push (compressed={})",
+                id, is_compressed
+            );
             let artifact_dir = app_state.project_dir.join("artifacts").join(&id);
             fs::create_dir_all(&artifact_dir).ok();
 
@@ -625,13 +662,13 @@ pub async fn push_handler(
                     path: id.clone(),
                     latest: 1,
                     locked_by: None,
-                    revisions: vec![Revision::new(1, &bytes)],
+                    revisions: vec![Revision::new(1, &bytes, is_compressed)],
                 },
             );
         }
     }
 
-    // Use the client's commit as the authoritative one
+    // 3. Update commits
     let new_commit = payload.commit;
     let new_hash = new_commit.hash.clone();
     commits_map.insert(new_hash.clone(), new_commit.clone());
@@ -664,7 +701,6 @@ pub async fn push_handler(
         Json(serde_json::to_value(new_commit).unwrap()),
     )
 }
-
 pub async fn download_artifact_handler(
     Path((project, id, filename)): Path<(String, String, String)>,
     State(state): State<SharedState>,
