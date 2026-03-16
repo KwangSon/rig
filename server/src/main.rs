@@ -237,13 +237,17 @@ fn load_project_state(project_dir: &StdPath) -> Result<AppState, String> {
                     compressed: r["compressed"].as_bool().unwrap_or(false),
                 })
                 .collect();
+            let id = v["id"].as_str().unwrap_or(k).to_string();
+            let moved_from = v["moved_from"].as_str().map(|s| s.to_string());
             artifacts.insert(
                 k.clone(),
                 protocol::Artifact {
+                    id,
                     path: path.to_string(),
                     latest,
                     locked_by,
                     revisions,
+                    moved_from,
                 },
             );
         }

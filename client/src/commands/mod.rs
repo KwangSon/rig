@@ -5,6 +5,7 @@ pub mod commit;
 pub mod fetch;
 pub mod gitmodule;
 pub mod log;
+pub mod mv;
 pub mod pull;
 pub mod push;
 pub mod status;

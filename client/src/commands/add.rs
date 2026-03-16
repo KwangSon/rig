@@ -1,11 +1,39 @@
 use sha1::{Digest, Sha1};
 use std::fs;
 use std::path::PathBuf;
+use uuid::Uuid;
 
 use protocol::{Artifact, IndexFile, Revision};
 
+fn resolve_artifact_id(index: &IndexFile, query: &str) -> Option<String> {
+    if index.artifacts.contains_key(query) {
+        return Some(query.to_string());
+    }
+    index
+        .artifacts
+        .iter()
+        .find(|(_, details)| details.path == query)
+        .map(|(id, _)| id.clone())
+}
+
 pub async fn run(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     println!("Running rig add (local) for path: {:?}", path);
+
+    // Check for source code extensions and warn
+    if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+        let source_extensions = [
+            "rs", "py", "c", "cpp", "h", "hpp", "js", "ts", "go", "java", "rb", "sh", "lua",
+        ];
+        if source_extensions.contains(&ext) {
+            println!(
+                "\x1b[33mWarning: You are adding a source code file ({:?}).\x1b[0m",
+                path
+            );
+            println!(
+                "\x1b[33mFor source code, it is highly recommended to use 'rig gitmodule' to manage it via Git.\x1b[0m"
+            );
+        }
+    }
 
     // Determine project root (.rig)
     let current_dir = std::env::current_dir()?;
@@ -21,10 +49,10 @@ pub async fn run(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let mut local_index: IndexFile = serde_json::from_str(&index_content)
         .map_err(|e| format!("Failed to parse local index.json: {}", e))?;
 
-    let artifact_name = path.to_string_lossy().to_string();
+    let path_str = path.to_string_lossy().to_string();
 
     // Read local file to verify it exists and compute hash
-    let local_path = current_dir.join(&artifact_name);
+    let local_path = current_dir.join(&path_str);
     if !local_path.exists() {
         return Err(format!("File not found: {}", local_path.display()).into());
     }
@@ -34,30 +62,32 @@ pub async fn run(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     hasher.update(&file_data);
     let hash = format!("{:x}", hasher.finalize());
 
-    // Check if it's already tracked
-    if let Some(artifact) = local_index.artifacts.get_mut(&artifact_name) {
-        println!("Artifact '{}' is already tracked.", artifact_name);
+    // Check if it's already tracked (look up by path)
+    if let Some(id) = resolve_artifact_id(&local_index, &path_str) {
+        let artifact = local_index.artifacts.get_mut(&id).unwrap();
+        println!("Artifact '{}' (id: {}) is already tracked.", path_str, id);
 
-        // If it's already in the index, rig add can be used to "stage" the current hash
-        // In our current simple implementation, being writable is the "staged" state for push.
-        // We'll just ensure it's recorded correctly.
         let already_has_hash = artifact.revisions.iter().any(|r| r.hash == hash);
         if !already_has_hash {
             println!("-> New local changes detected for existing artifact.");
         }
     } else {
-        println!("-> Tracking new artifact: {}", artifact_name);
+        // Create a new unique ID
+        let new_id = Uuid::new_v4().to_string();
+        println!("-> Tracking new artifact: {} (id: {})", path_str, new_id);
         local_index.artifacts.insert(
-            artifact_name.clone(),
+            new_id.clone(),
             Artifact {
-                path: artifact_name.clone(),
-                latest: 0, // 0 means it hasn't been pushed to server yet
+                id: new_id.clone(),
+                path: path_str.clone(),
+                latest: 0,
                 locked_by: None,
                 revisions: vec![Revision {
                     rev: 0,
                     hash: hash.clone(),
                     compressed: false,
                 }],
+                moved_from: None,
             },
         );
     }
@@ -67,7 +97,7 @@ pub async fn run(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 
     println!(
         "Added '{}' to local index. It will be uploaded on next push.",
-        artifact_name
+        path_str
     );
     Ok(())
 }

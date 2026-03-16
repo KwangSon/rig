@@ -42,10 +42,13 @@ impl Revision {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Artifact {
+    pub id: String,
     pub path: String,
     pub latest: u32,
     pub locked_by: Option<String>,
     pub revisions: Vec<Revision>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moved_from: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

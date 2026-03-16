@@ -44,8 +44,13 @@ enum Commands {
     },
     /// Pulls changes from the remote repository and updates local files
     Pull {
-        /// The path to the artifact to pull
-        path: PathBuf,
+        /// The path to the artifact to pull (e.g., 'file.png', 'dir/', '*', or 'file.png@10')
+        path: String,
+        /// Optional revision (e.g., '@10')
+        revision: Option<String>,
+        /// Optional output path for the pulled artifact
+        #[arg(short, long)]
+        out: Option<PathBuf>,
     },
     /// Pushes local changes to the remote repository, creating a new server revision
     Push {
@@ -65,6 +70,13 @@ enum Commands {
     Blame {
         /// The path to the artifact to blame
         path: PathBuf,
+    },
+    /// Moves or renames an artifact
+    Mv {
+        /// The source path of the artifact to move
+        src: PathBuf,
+        /// The destination path of the artifact
+        dst: PathBuf,
     },
     /// Adds a new artifact or updates an existing one (requires lock)
     Add {
@@ -144,8 +156,12 @@ async fn main() {
                 std::process::exit(1);
             }
         }
-        Commands::Pull { path } => {
-            if let Err(e) = commands::pull::run(path.clone()).await {
+        Commands::Pull {
+            path,
+            revision,
+            out,
+        } => {
+            if let Err(e) = commands::pull::run(path.clone(), revision.clone(), out.clone()).await {
                 eprintln!("[error] Failed to pull: {}", e);
                 std::process::exit(1);
             }
@@ -171,6 +187,12 @@ async fn main() {
         Commands::Blame { path } => {
             if let Err(e) = commands::blame::run(path.clone()).await {
                 eprintln!("[error] Failed to blame: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Commands::Mv { src, dst } => {
+            if let Err(e) = commands::mv::run(src.clone(), dst.clone()).await {
+                eprintln!("[error] Failed to move artifact: {}", e);
                 std::process::exit(1);
             }
         }

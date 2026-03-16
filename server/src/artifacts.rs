@@ -111,10 +111,12 @@ pub async fn create_artifact_handler(
     app_state.artifacts.insert(
         payload.path.clone(),
         Artifact {
+            id: payload.path.clone(),
             path: payload.path.clone(),
             latest: 1,
             locked_by: None,
             revisions: vec![Revision::new(1, &bytes, false)],
+            moved_from: None,
         },
     );
 
@@ -659,10 +661,12 @@ pub async fn push_handler(
             app_state.artifacts.insert(
                 id.clone(),
                 Artifact {
+                    id: id.clone(),
                     path: id.clone(),
                     latest: 1,
                     locked_by: None,
                     revisions: vec![Revision::new(1, &bytes, is_compressed)],
+                    moved_from: None,
                 },
             );
         }
