@@ -31,6 +31,8 @@ The Rig system inherently uses an explicit Lock/Unlock mechanism for version con
 - **Description**: Acquires an exclusive lock to prevent other users from concurrently editing the artifact on the current branch.
 - **Specification & Side-effects**:
   - 🔒 **Permission Change**: Upon successfully acquiring the branch-isolated lock from the server (bound securely to `artifact_id` and the current branch name), the local file system permissions for the target file are changed from **read-only (`r--`) to read/write (`rw-`)**.
+  - **Cross-Branch Warning**: Because locks are isolated per branch, the server will check if the artifact is already locked on *any other branch*. If it is, the server grants the lock but the client MUST display a prominent warning: "WARNING: This binary artifact is currently locked and being edited on another branch. Binary files cannot be merged. Parallel edits will result in un-mergeable conflicts across branches." This ensures the user is deliberately accepting the risk of a parallel branch edit.
+  - **Outdated File Guardrail**: If the local file's revision is older than the server's current `HEAD`, the server will proactively deny the lock request (or the client will warn) and prompt the user to `rig pull` first. This prevents the user from wasting time editing a file that will inevitably be rejected during `rig push` due to Stale Lineage constraints.
   - **Automatic Data Fetch**: If the targeted artifact is currently a 0-byte placeholder (lazy-loaded state), `rig lock` will automatically trigger a background `pull` to fetch the real file payload before granting `rw-` access.
   - If another user already holds the lock, the server will deny the request, and the local file will remain read-only.
   - This command must precede any file modification or the use of the `add` command.
@@ -39,7 +41,7 @@ The Rig system inherently uses an explicit Lock/Unlock mechanism for version con
 - **Description**: Releases the branch-specific lock on an artifact after editing is complete, allowing other users to acquire a lock on this branch and modify it.
 - **Specification & Side-effects**:
   - 🔓 **Permission Change**: Upon successful unlock, the local file permissions are **reverted to read-only (`r--`)** to prevent further unauthorized modifications.
-  - **Local Status Check (Enforce Push on Unlock)**: Before releasing the lock, the client verifies the local `.rig/` index *for the currently active branch*. If the artifact has pending local commits on this branch that have not been pushed to the server, the command **aborts with a hard error**. Because locks are securely isolated by branch, checking only the current branch's local index is mathematically safe and prevents cross-branch bypasses.
+  - **Local Status Check (Enforce Push on Unlock)**: Before releasing the lock, the client deeply verifies the local `.rig/` index *and* the local **stash stack** (`rig stash`) for the currently active branch. If the artifact has pending local commits OR unpopped stashed modifications, the command **aborts with a hard error**. Because stashing binary edits hides them from the active index, checking the stash stack is mandatory to prevent un-mergeable conflicts upon subsequent popping.
   - The `--force` (`-f`) flag forcibly breaks a branch-isolated lock held by another user from the server-side. Note that this may fail depending on permission controls or server settings. An offline user who has their lock forcefully revoked will have their subsequent `push` rejected due to Lock Generation ID mismatch.
 
 ---
@@ -68,7 +70,7 @@ The Rig system inherently uses an explicit Lock/Unlock mechanism for version con
 - **Description**: Uploads local commits and changes to the remote server.
 - **Specification & Side-effects**:
   - If the `--message` parameter is omitted, the most recent local commit message is used automatically.
-  - **Push-Time Lock Validation**: The client transmits its known Lock Generation ID for modified artifacts. The server **hard-rejects the push** if the lock token does not match the server's current state (e.g., if an Admin performed a force-unlock while the user was offline).
+  - **Push-Time Lock Validation**: The client transmits its known Lock Generation ID and the **Base Revision Hash** it started editing from for modified artifacts. The server **hard-rejects the push** if the lock token does not match the server's current state (Authorization Failure) or if the Base Revision Hash does not match the server's current `HEAD` (Stale Lineage/Regression Prevention).
   - Creates a new revision on the server. To avoid synchronization conflicts, it is recommended to `pull` the latest changes before using `push`.
 
 ### `rig pull <path> [revision] [--out <out_path>]`
