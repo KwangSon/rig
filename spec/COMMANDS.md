@@ -32,7 +32,7 @@ The Rig system inherently uses an explicit Lock/Unlock mechanism for version con
 - **Specification & Side-effects**:
   - 🔒 **Permission Change**: Upon successfully acquiring the branch-isolated lock from the server (bound securely to `artifact_id` and the current branch name), the local file system permissions for the target file are changed from **read-only (`r--`) to read/write (`rw-`)**.
   - **Cross-Branch Warning**: Because locks are isolated per branch, the server will check if the artifact is already locked on *any other branch*. If it is, the server grants the lock but the client MUST display a prominent warning: "WARNING: This binary artifact is currently locked and being edited on another branch. Binary files cannot be merged. Parallel edits will result in un-mergeable conflicts across branches." This ensures the user is deliberately accepting the risk of a parallel branch edit.
-  - **Outdated File Guardrail**: If the local file's revision is older than the server's current `HEAD`, the server will proactively deny the lock request (or the client will warn) and prompt the user to `rig pull` first. This prevents the user from wasting time editing a file that will inevitably be rejected during `rig push` due to Stale Lineage constraints.
+  - **Outdated File Guardrail**: If the local file's revision is older than the server's current `HEAD`, **the server MUST deny the lock request** and return an error prompting the user to `rig pull` first. The client MAY additionally surface this as a pre-flight warning before contacting the server, but this does not substitute the server-side enforcement.
   - **Automatic Data Fetch**: If the targeted artifact is currently a 0-byte placeholder (lazy-loaded state), `rig lock` will automatically trigger a background `pull` to fetch the real file payload before granting `rw-` access.
   - If another user already holds the lock, the server will deny the request, and the local file will remain read-only.
   - This command must precede any file modification or the use of the `add` command.
@@ -121,6 +121,7 @@ The Rig system inherently uses an explicit Lock/Unlock mechanism for version con
 - **Description**: Moves or renames a tracked artifact.
 - **Specification & Side-effects**:
   - Physically moves the file within the local file system and automatically updates the tracked path within the internal `rig` index.
+  - **Collision Check**: Before executing the move, the client MUST check the local `.rig/index` to verify that `dst` is not already mapped to an existing `artifact_id`. If a collision is detected, the command MUST abort with an error: `Error: destination path 'dst' is already tracked as artifact [artifact_id]. Use 'rig lock' and remove or rename the destination artifact first.`
   - **Lock Continuity**: Because server-side locks are bound to the immutable `artifact_id` rather than the string path, `rig mv` can operate purely locally and offline without orphaning the server lock. The lock remains securely attached to the data payload regardless of its local path.
 
 ---

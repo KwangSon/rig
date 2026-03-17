@@ -75,11 +75,11 @@ This ensures password-less, cryptographically secure collaboration.
 
 ## 4. Role-Based Access Control (RBAC) & Permissions
 
-As defined in the `permissions` and `users` tables, Rig enforces strict Role-Based Access Control. Because Rig relies on exclusive locks (changing file permissions from `r--` to `rw-`), concurrent modification conflicts are structurally impossible. However, this introduces the need for robust access and override management:
+As defined in the `permissions` table, Rig enforces strict Role-Based Access Control. Because Rig relies on exclusive locks (changing file permissions from `r--` to `rw-`), concurrent modification conflicts are structurally impossible. However, this introduces the need for robust access and override management:
 
 - **Read Access (`read`)**: Users with this level can only perform non-mutating operations: `clone`, `fetch`, `pull`, and `log`. They cannot acquire locks.
 - **Write Access (`write`)**: In addition to read privileges, these users can perform mutating operations on the repository: `lock`, `add`, `commit`, and `push`.
-- **Admin Access (`admin`)**: Admins have full control over the project. Crucially, because there are no timeouts on acquired locks, if a user acquires a lock and becomes unavailable (e.g., leaves the company or goes on vacation), an Admin must intervene. **Only users with the `admin` role can execute `rig unlock <path> --force` to forcibly seize and release a lock** held by another user.
+- **Admin Access (`admin`)**: Admins have full control over the project. Crucially, because there are no timeouts on acquired locks, if a user acquires a lock and becomes unavailable (e.g., leaves the company or goes on vacation), an Admin must intervene. **Only users with the `admin` access level in the `permissions` table can execute `rig unlock <path> --force` to forcibly seize and release a lock** held by another user.
 
 ### Mitigating Concurrency with Offline Commits
 While exclusive locks prevent simultaneous online edits, an architectural challenge arises when an offline user holds a lock on a binary asset, continues to create local `commit`s, but an Admin forces an unlock (`--force`). If another user acquires the freed lock and pushes, the offline user's subsequent push would cause an un-mergeable binary conflict. 
@@ -114,7 +114,6 @@ Manages system users and authentication credentials.
 - `name` (Text)
 - `email` (Text, Unique)
 - `password_hash` (Text)
-- `role` (Text: 'admin' or 'user')
 - `created_at` (Timestamp)
 
 ### `projects`
@@ -134,7 +133,7 @@ Provides Role-Based Access Control (RBAC) tying users to projects.
 ### `ssh_keys`
 Stores public SSH keys for secure artifact and git submodule access management.
 - `id` (UUID, Primary Key)
-- `project_id` (UUID, Foreign Key → `projects.id`)
+- `user_id` (UUID, Foreign Key → `users.id`)
 - `title` (String)
 - `key_data` (Text)
 - `created_at` (Timestamp)
