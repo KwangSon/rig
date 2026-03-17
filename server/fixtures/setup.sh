@@ -22,6 +22,8 @@ createdb "$DB_NAME"
 echo "Running migrations..."
 psql "$DB_URL" -f server/migrations/001_create_users.sql
 psql "$DB_URL" -f server/migrations/002_create_permissions.sql
+psql "$DB_URL" -f server/migrations/003_create_ssh_keys.sql
+psql "$DB_URL" -f server/migrations/004_create_file_metadata.sql
 
 echo "Enabling pgcrypto extension for password hashing..."
 psql "$DB_URL" -c "CREATE EXTENSION IF NOT EXISTS pgcrypto;"

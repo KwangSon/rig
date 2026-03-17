@@ -266,6 +266,7 @@ pub async fn get_revisions_handler(
 pub async fn lock_handler(
     Path((project, id)): Path<(String, String)>,
     State(state): State<SharedState>,
+    State(db): State<sqlx::PgPool>,
     Json(payload): Json<LockRequest>,
 ) -> (StatusCode, Json<LockResponse>) {
     let mut projects = state.lock().await;
@@ -289,6 +290,16 @@ pub async fn lock_handler(
             if let Err(e) = persist_index(app_state) {
                 eprintln!("Failed to persist lock state: {}", e);
             }
+
+            // Sync with postgres file_locks table
+            let _ = sqlx::query!(
+                "INSERT INTO file_locks (project, file_path, locked_by, locked_at) VALUES ($1, $2, $3, NOW()) ON CONFLICT (project, file_path) DO UPDATE SET locked_by = $3, locked_at = NOW()",
+                project,
+                id,
+                payload.user
+            )
+            .execute(&db)
+            .await;
             (
                 StatusCode::OK,
                 Json(LockResponse {
@@ -329,6 +340,7 @@ pub async fn unlock_handler(
     Path((project, id)): Path<(String, String)>,
     State(state): State<SharedState>,
     State(user_state): State<crate::users::SharedUserState>,
+    State(db): State<sqlx::PgPool>,
     Json(payload): Json<UnlockRequest>,
 ) -> (StatusCode, Json<LockResponse>) {
     let mut projects = state.lock().await;
@@ -385,6 +397,15 @@ pub async fn unlock_handler(
                 if let Err(e) = persist_index(app_state) {
                     eprintln!("Failed to persist lock state: {}", e);
                 }
+
+                // Sync with postgres file_locks table
+                let _ = sqlx::query!(
+                    "DELETE FROM file_locks WHERE project = $1 AND file_path = $2",
+                    project,
+                    id
+                )
+                .execute(&db)
+                .await;
                 (
                     StatusCode::OK,
                     Json(LockResponse {
@@ -565,11 +586,14 @@ use axum::extract::Multipart;
 pub struct PushMetadata {
     pub commit: protocol::Commit,
     pub artifact_compression: std::collections::HashMap<String, bool>,
+    #[serde(default)]
+    pub artifact_paths: std::collections::HashMap<String, String>,
 }
 
 pub async fn push_handler(
     Path(project): Path<String>,
     State(state): State<SharedState>,
+    State(db): State<sqlx::PgPool>,
     mut multipart: Multipart,
 ) -> (StatusCode, Json<serde_json::Value>) {
     let mut projects = state.lock().await;
@@ -643,6 +667,15 @@ pub async fn push_handler(
                 .revisions
                 .push(Revision::new(new_rev, &bytes, is_compressed));
             artifact.locked_by = None; // Auto-unlock on push
+
+            // Auto-unlock in postgres
+            let _ = sqlx::query!(
+                "DELETE FROM file_locks WHERE project = $1 AND file_path = $2",
+                project,
+                id
+            )
+            .execute(&db)
+            .await;
         } else {
             // New artifact
             println!(
@@ -658,11 +691,17 @@ pub async fn push_handler(
                 continue;
             }
 
+            let artifact_path = payload
+                .artifact_paths
+                .get(&id)
+                .map(|s| s.clone())
+                .unwrap_or_else(|| id.clone());
+
             app_state.artifacts.insert(
                 id.clone(),
                 Artifact {
                     id: id.clone(),
-                    path: id.clone(),
+                    path: artifact_path,
                     latest: 1,
                     locked_by: None,
                     revisions: vec![Revision::new(1, &bytes, is_compressed)],

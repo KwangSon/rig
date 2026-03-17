@@ -1,30 +1,17 @@
-use std::collections::HashMap;
-use std::fs;
-
-use protocol::{Commit, IndexFile};
-use serde_json;
+use crate::repository::Repository;
+use protocol::Commit;
 use sha1::{Digest, Sha1};
+use std::collections::HashMap;
 
 pub async fn run(message: &str) -> Result<(), Box<dyn std::error::Error>> {
     println!("Running rig commit with message: '{}'", message);
 
     let current_dir = std::env::current_dir()?;
-    let rig_dir = current_dir.join(".rig");
-    if !rig_dir.exists() {
-        return Err("Not a rig repository (no .rig directory found)".into());
-    }
+    let repo = Repository::open(&current_dir)?;
+    let mut local_index = repo.read_index()?;
+    let config = repo.read_config()?;
 
-    let index_path = rig_dir.join("index.json");
-    let index_content = fs::read_to_string(&index_path)
-        .map_err(|e| format!("Failed to read local index.json: {}", e))?;
-    let mut local_index: IndexFile = serde_json::from_str(&index_content)
-        .map_err(|e| format!("Failed to parse local index.json: {}", e))?;
-
-    let current_parent = if local_index.latest_commit.is_empty() {
-        None
-    } else {
-        Some(local_index.latest_commit.clone())
-    };
+    let current_parent = repo.head_commit()?;
 
     // Build the artifact -> revision map for this commit.
     // Use whatever `latest` is currently in the index.
@@ -35,7 +22,7 @@ pub async fn run(message: &str) -> Result<(), Box<dyn std::error::Error>> {
         .collect();
 
     // Generate hash from parent, message, author, and artifacts
-    let author = local_index
+    let author = config
         .username
         .clone()
         .unwrap_or_else(|| "unknown".to_string());
@@ -59,10 +46,16 @@ pub async fn run(message: &str) -> Result<(), Box<dyn std::error::Error>> {
         artifacts,
     };
 
-    local_index.commits.insert(hash.clone(), commit);
-    local_index.latest_commit = hash.clone();
+    repo.write_commit(&commit)?;
 
-    fs::write(&index_path, serde_json::to_string_pretty(&local_index)?)?;
+    // Update branch head if we are on a branch
+    let head = repo.read_head()?;
+    if let Some(ref_path) = head.strip_prefix("ref: ") {
+        repo.write_ref(ref_path, &hash)?;
+    } else {
+        // Detached head, just update HEAD
+        repo.write_head(&hash)?;
+    }
 
     println!("Committed (hash={}): {}", hash, message);
 

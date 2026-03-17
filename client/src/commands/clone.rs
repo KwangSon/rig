@@ -1,3 +1,4 @@
+use crate::repository::{Config, Index, Repository};
 use protocol::IndexFile;
 use std::fs;
 use std::path::PathBuf;
@@ -84,9 +85,9 @@ pub async fn run(
             trimmed.to_string()
         }
     };
-    index.username = Some(username);
+    index.username = Some(username.clone());
 
-    // 3. Create .rig folder and write index.json
+    // 3. Create .rig folder and initialize via Repository
     let clone_path = match path {
         Some(p) => p.clone(),
         None => PathBuf::from(project_name),
@@ -101,14 +102,35 @@ pub async fn run(
         .into());
     }
 
-    let rig_path = clone_path.join(".rig");
-    fs::create_dir_all(&rig_path)?;
+    fs::create_dir_all(&clone_path)?;
+    let repo = Repository::init(&clone_path)?;
 
-    let index_path = rig_path.join("index.json");
-    fs::write(&index_path, serde_json::to_string_pretty(&index)?)?;
+    // 3.1 Write config
+    let config = Config {
+        project: project_name.to_string(),
+        server_url: Some(base_url.to_string()),
+        username: Some(username),
+    };
+    repo.write_config(&config)?;
+
+    for (_hash, commit) in index.commits {
+        repo.write_commit(&commit)?;
+    }
+
+    // 3.3 Set HEAD and refs/heads/main if there are commits
+    if !index.latest_commit.is_empty() {
+        repo.write_ref("refs/heads/main", &index.latest_commit)?;
+    }
+
+    // 3.4 Write tracking index
+    let local_index = Index {
+        artifacts: index.artifacts,
+        git_modules: index.git_modules,
+    };
+    repo.write_index(&local_index)?;
 
     // 4. Create empty read-only files for each artifact
-    for artifact in index.artifacts.values() {
+    for artifact in local_index.artifacts.values() {
         let file_path = clone_path.join(&artifact.path);
         println!("-> Creating placeholder for {}", artifact.path);
 
@@ -131,7 +153,7 @@ pub async fn run(
         project_name,
         clone_path.display()
     );
-    println!("Created .rig directory and index.json");
+    println!("Created Git-like .rig directory structure.");
 
     Ok(())
 }

@@ -157,6 +157,15 @@ async fn main() {
             "/projects/{name}",
             get(get_project_handler).delete(delete_project_handler),
         )
+        .route("/projects/{name}/files", get(files::list_files_handler))
+        .route(
+            "/projects/{name}/ssh-keys",
+            get(keys::get_keys_handler).post(keys::add_key_handler),
+        )
+        .route(
+            "/projects/{name}/ssh-keys/{id}",
+            delete(keys::delete_key_handler),
+        )
         .route("/create_project", post(create_project_handler))
         .route(
             "/users",
@@ -287,12 +296,18 @@ async fn health_handler() -> Json<HealthResponse> {
 async fn get_projects_handler(
     State(combined): State<CombinedState>,
 ) -> Json<Vec<serde_json::Value>> {
-    let projects = sqlx::query("SELECT name, owner_id FROM projects")
+    let projects = sqlx::query(
+        "SELECT p.name, p.owner_id, u.name as owner_name FROM projects p JOIN users u ON p.owner_id = u.id"
+    )
         .fetch_all(&combined.db)
         .await
         .unwrap_or_default()
         .into_iter()
-        .map(|row| serde_json::json!({"name": row.get::<String, _>("name"), "owner_id": row.get::<Uuid, _>("owner_id")}))
+        .map(|row| serde_json::json!({
+            "name": row.get::<String, _>("name"),
+            "owner_id": row.get::<Uuid, _>("owner_id"),
+            "owner_name": row.get::<String, _>("owner_name")
+        }))
         .collect();
     Json(projects)
 }
@@ -441,7 +456,9 @@ async fn get_project_handler(
     State(combined): State<CombinedState>,
     Path(name): Path<String>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let project = sqlx::query("SELECT name, owner_id FROM projects WHERE name = $1")
+    let project = sqlx::query(
+        "SELECT p.name, p.owner_id, u.name as owner_name FROM projects p JOIN users u ON p.owner_id = u.id WHERE p.name = $1"
+    )
         .bind(&name)
         .fetch_optional(&combined.db)
         .await
@@ -450,7 +467,8 @@ async fn get_project_handler(
 
     Ok(Json(serde_json::json!({
         "name": project.get::<String, _>("name"),
-        "owner_id": project.get::<Uuid, _>("owner_id")
+        "owner_id": project.get::<Uuid, _>("owner_id"),
+        "owner_name": project.get::<String, _>("owner_name")
     })))
 }
 
@@ -524,4 +542,6 @@ async fn delete_project_handler(
 // --- Artifacts Module ---
 
 mod artifacts;
+mod files;
+mod keys;
 mod users;

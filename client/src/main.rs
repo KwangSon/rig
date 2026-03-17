@@ -2,10 +2,13 @@ use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
 mod commands;
+pub mod repository;
 mod utils;
 use protocol::IndexFile;
 
-fn resolve_artifact_id(index: &IndexFile, query: &str) -> Option<String> {
+use crate::repository::{Index, Repository};
+
+fn resolve_artifact_id(index: &Index, query: &str) -> Option<String> {
     if index.artifacts.contains_key(query) {
         return Some(query.to_string());
     }
@@ -79,7 +82,7 @@ enum Commands {
         path: PathBuf,
     },
     /// Lists, creates, or deletes branches
-    Branch,
+    Branch { name: Option<String> },
     /// Switches to a different branch
     Checkout {
         /// The name of the branch to checkout
@@ -200,8 +203,8 @@ async fn main() {
                 std::process::exit(1);
             }
         }
-        Commands::Branch => {
-            if let Err(e) = commands::branch::run().await {
+        Commands::Branch { name } => {
+            if let Err(e) = commands::branch::run(name.clone()).await {
                 eprintln!("[error] Branch command failed: {}", e);
                 std::process::exit(1);
             }
@@ -242,33 +245,29 @@ async fn main() {
 async fn lock_artifact(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     println!("Locking artifact: {}", path.display());
 
-    // Get current dir, check .rig
+    // Get current dir, open repo
     let current_dir = std::env::current_dir()?;
-    let rig_dir = current_dir.join(".rig");
-    if !rig_dir.exists() {
-        return Err("Not a rig repository".into());
-    }
+    let repo = Repository::open(&current_dir)?;
 
-    // Read index.json
-    let index_path = rig_dir.join("index.json");
-    let index_content = std::fs::read_to_string(&index_path)?;
-    let index: IndexFile = serde_json::from_str(&index_content)?;
+    // Read index and config
+    let index = repo.read_index()?;
+    let config = repo.read_config()?;
 
     let path_str = path.to_string_lossy().to_string();
     let artifact_id = resolve_artifact_id(&index, &path_str)
         .ok_or_else(|| format!("Artifact '{}' not found", path_str))?;
 
-    let username = index.username.as_deref().unwrap_or("unknown");
+    let username = config.username.as_deref().unwrap_or("unknown");
 
     // Send POST to server (lock endpoint is namespaced by project)
     let client = reqwest::Client::new();
-    let server_url = index
+    let server_url = config
         .server_url
         .as_deref()
         .unwrap_or("http://localhost:3000");
     let url = format!(
         "{}/api/v1/{}/artifacts/{}/lock",
-        server_url, index.project, artifact_id
+        server_url, config.project, artifact_id
     );
     let body = serde_json::json!({"user": username});
     let resp = client.post(&url).json(&body).send().await?;
@@ -299,33 +298,29 @@ async fn lock_artifact(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
 async fn unlock_artifact(path: &Path, force: bool) -> Result<(), Box<dyn std::error::Error>> {
     println!("Unlocking artifact: {}", path.display());
 
-    // Get current dir, check .rig
+    // Get current dir, open repo
     let current_dir = std::env::current_dir()?;
-    let rig_dir = current_dir.join(".rig");
-    if !rig_dir.exists() {
-        return Err("Not a rig repository".into());
-    }
+    let repo = Repository::open(&current_dir)?;
 
-    // Read index.json
-    let index_path = rig_dir.join("index.json");
-    let index_content = std::fs::read_to_string(&index_path)?;
-    let index: IndexFile = serde_json::from_str(&index_content)?;
+    // Read index and config
+    let index = repo.read_index()?;
+    let config = repo.read_config()?;
 
     let path_str = path.to_string_lossy().to_string();
     let artifact_id = resolve_artifact_id(&index, &path_str)
         .ok_or_else(|| format!("Artifact '{}' not found", path_str))?;
 
-    let username = index.username.as_deref().unwrap_or("unknown");
+    let username = config.username.as_deref().unwrap_or("unknown");
 
     // Send DELETE to server (unlock endpoint is namespaced by project)
     let client = reqwest::Client::new();
-    let server_url = index
+    let server_url = config
         .server_url
         .as_deref()
         .unwrap_or("http://localhost:3000");
     let url = format!(
         "{}/api/v1/{}/artifacts/{}/lock",
-        server_url, index.project, artifact_id
+        server_url, config.project, artifact_id
     );
     let body = serde_json::json!({
         "user": username,

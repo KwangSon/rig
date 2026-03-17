@@ -1,3 +1,4 @@
+use crate::repository::{Index, Repository};
 use flate2::read::GzDecoder;
 use protocol::IndexFile;
 use std::fs;
@@ -47,32 +48,39 @@ pub async fn run(
 
     // Determine the current project root (where .rig is located)
     let current_dir = std::env::current_dir()?;
-    let rig_dir = current_dir.join(".rig");
+    let repo = Repository::open(&current_dir)?;
 
-    if !rig_dir.exists() || !rig_dir.is_dir() {
-        return Err("Not a rig repository".into());
-    }
-
-    // Read local index
-    let local_index_path = rig_dir.join("index.json");
-    let local_index: IndexFile = serde_json::from_str(&fs::read_to_string(&local_index_path)?)?;
+    let local_index = repo.read_index()?;
+    let config = repo.read_config()?;
 
     // Fetch latest index from server
     let client = reqwest::Client::new();
-    let server_url = local_index
+    let server_url = config
         .server_url
         .as_deref()
         .unwrap_or("http://localhost:3000");
-    let remote_index_url = format!("{}/api/v1/{}/index.json", server_url, local_index.project);
+    let remote_index_url = format!("{}/api/v1/{}/index.json", server_url, config.project);
     let remote_resp = client.get(&remote_index_url).send().await?;
     let remote_index: IndexFile = serde_json::from_str(&remote_resp.text().await?)?;
 
     // Resolution helpers
-    fn resolve_artifact_id(index: &IndexFile, query: &str) -> Option<String> {
+    fn resolve_artifact_id(index: &IndexFile, local_index: &Index, query: &str) -> Option<String> {
         if index.artifacts.contains_key(query) {
             return Some(query.to_string());
         }
-        index
+        if let Some(id) = index
+            .artifacts
+            .iter()
+            .find(|(_, details)| details.path == query)
+            .map(|(id, _)| id.clone())
+        {
+            return Some(id);
+        }
+        // Fallback to local index for resolution
+        if local_index.artifacts.contains_key(query) {
+            return Some(query.to_string());
+        }
+        local_index
             .artifacts
             .iter()
             .find(|(_, details)| details.path == query)
@@ -97,17 +105,30 @@ pub async fn run(
             targets.push((id.clone(), rev));
         }
     } else {
-        // Specific artifact or directory
-        let matches: Vec<String> = remote_index
+        let mut matches: Vec<String> = remote_index
             .artifacts
             .iter()
             .filter(|(_, details)| details.path.starts_with(&path_str))
             .map(|(id, _)| id.clone())
             .collect();
 
+        // Also check local index for matches in case the file hasn't been fetched fully
+        if matches.is_empty() {
+            matches = local_index
+                .artifacts
+                .iter()
+                .filter(|(_, details)| details.path.starts_with(&path_str))
+                .map(|(id, _)| id.clone())
+                .collect();
+        }
+
         if !matches.is_empty() {
             for id in matches {
-                let artifact = &remote_index.artifacts[&id];
+                let artifact = remote_index
+                    .artifacts
+                    .get(&id)
+                    .or_else(|| local_index.artifacts.get(&id))
+                    .unwrap();
                 let rev = if let Some(ref commit_hash) = requested_commit {
                     let commit = remote_index
                         .commits
@@ -119,8 +140,12 @@ pub async fn run(
                 };
                 targets.push((id, rev));
             }
-        } else if let Some(id) = resolve_artifact_id(&remote_index, &path_str) {
-            let artifact = &remote_index.artifacts[&id];
+        } else if let Some(id) = resolve_artifact_id(&remote_index, &local_index, &path_str) {
+            let artifact = remote_index
+                .artifacts
+                .get(&id)
+                .or_else(|| local_index.artifacts.get(&id))
+                .unwrap();
             let rev = if let Some(ref commit_hash) = requested_commit {
                 let commit = remote_index
                     .commits
@@ -132,13 +157,26 @@ pub async fn run(
             };
             targets.push((id, rev));
         } else {
+            println!("[debug] Pull failed. Path searched: '{}'", path_str);
+            println!("[debug] Remote Artifacts:");
+            for (id, artifact) in &remote_index.artifacts {
+                println!("  ID: {}, Path: '{}'", id, artifact.path);
+            }
+            println!("[debug] Local Artifacts:");
+            for (id, artifact) in &local_index.artifacts {
+                println!("  ID: {}, Path: '{}'", id, artifact.path);
+            }
             return Err(format!("Path '{}' not found", path_str).into());
         }
     }
 
     // Pull artifacts
     for (artifact_id, rev) in targets {
-        let artifact_details = &remote_index.artifacts[&artifact_id];
+        let artifact_details = remote_index
+            .artifacts
+            .get(&artifact_id)
+            .or_else(|| local_index.artifacts.get(&artifact_id))
+            .unwrap();
 
         let revision_info = artifact_details
             .revisions
@@ -157,7 +195,7 @@ pub async fn run(
         let remote_filename = format!("rev{}{}", rev, ext);
         let download_url = format!(
             "{}/api/v1/{}/artifacts/{}/{}",
-            server_url, local_index.project, artifact_id, remote_filename
+            server_url, config.project, artifact_id, remote_filename
         );
 
         let mut file_content = client
@@ -205,14 +243,20 @@ pub async fn run(
 
     // Update index if no specific revision/commit/out used
     if requested_rev.is_none() && requested_commit.is_none() && out_arg.is_none() {
-        let mut final_index = remote_index;
-        final_index.server_url = local_index.server_url;
-        final_index.username = local_index.username;
-        fs::write(
-            &local_index_path,
-            serde_json::to_string_pretty(&final_index)?,
-        )?;
-        println!("   Local index updated.");
+        let mut final_index = local_index;
+        final_index.artifacts = remote_index.artifacts;
+        final_index.git_modules = remote_index.git_modules;
+        repo.write_index(&final_index)?;
+
+        for (_, commit) in remote_index.commits {
+            repo.write_commit(&commit)?;
+        }
+
+        if !remote_index.latest_commit.is_empty() {
+            repo.write_ref("refs/heads/main", &remote_index.latest_commit)?;
+        }
+
+        println!("   Local repository and index updated.");
     }
 
     Ok(())

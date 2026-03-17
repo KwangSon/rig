@@ -1,11 +1,11 @@
+use crate::repository::{Index, Repository};
+use protocol::{Artifact, Revision};
 use sha1::{Digest, Sha1};
 use std::fs;
 use std::path::PathBuf;
 use uuid::Uuid;
 
-use protocol::{Artifact, IndexFile, Revision};
-
-fn resolve_artifact_id(index: &IndexFile, query: &str) -> Option<String> {
+fn resolve_artifact_id(index: &Index, query: &str) -> Option<String> {
     if index.artifacts.contains_key(query) {
         return Some(query.to_string());
     }
@@ -35,19 +35,10 @@ pub async fn run(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Determine project root (.rig)
-    let current_dir = std::env::current_dir()?;
-    let rig_dir = current_dir.join(".rig");
-    if !rig_dir.exists() {
-        return Err("Not a rig repository (no .rig directory found)".into());
-    }
-
     // Read local index
-    let index_path = rig_dir.join("index.json");
-    let index_content = fs::read_to_string(&index_path)
-        .map_err(|e| format!("Failed to read local index.json: {}", e))?;
-    let mut local_index: IndexFile = serde_json::from_str(&index_content)
-        .map_err(|e| format!("Failed to parse local index.json: {}", e))?;
+    let current_dir = std::env::current_dir()?;
+    let repo = Repository::open(&current_dir)?;
+    let mut local_index = repo.read_index()?;
 
     let path_str = path.to_string_lossy().to_string();
 
@@ -92,8 +83,8 @@ pub async fn run(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    // Persist local index.json
-    fs::write(&index_path, serde_json::to_string_pretty(&local_index)?)?;
+    // Persist local index
+    repo.write_index(&local_index)?;
 
     println!(
         "Added '{}' to local index. It will be uploaded on next push.",

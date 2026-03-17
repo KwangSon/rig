@@ -1,25 +1,19 @@
-use std::fs;
-
+use crate::repository::{Index, Repository};
 use protocol::IndexFile;
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("Running rig fetch...");
 
     let current_dir = std::env::current_dir()?;
-    let rig_dir = current_dir.join(".rig");
-    if !rig_dir.exists() {
-        return Err("Not a rig repository (no .rig directory found)".into());
-    }
-
-    let index_path = rig_dir.join("index.json");
-    let index_content = fs::read_to_string(&index_path)
-        .map_err(|e| format!("Failed to read local index.json: {}", e))?;
-    let local_index: IndexFile = serde_json::from_str(&index_content)
-        .map_err(|e| format!("Failed to parse local index.json: {}", e))?;
+    let repo = Repository::open(&current_dir)?;
+    let config = repo.read_config()?;
 
     let client = reqwest::Client::new();
-    let server_url = "http://localhost:3000";
-    let remote_index_url = format!("{}/api/v1/{}/index.json", server_url, local_index.project);
+    let server_url = config
+        .server_url
+        .as_deref()
+        .unwrap_or("http://localhost:3000");
+    let remote_index_url = format!("{}/api/v1/{}/index.json", server_url, config.project);
 
     println!("-> Fetching remote metadata from {}...", remote_index_url);
     let resp = client
@@ -37,11 +31,23 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let remote_index_content = resp.text().await?;
-    // Validate it can be parsed before writing it out
-    let _remote_index: IndexFile = serde_json::from_str(&remote_index_content)
+    let remote_index: IndexFile = serde_json::from_str(&remote_index_content)
         .map_err(|e| format!("Failed to parse remote index.json: {}", e))?;
 
-    fs::write(&index_path, remote_index_content)?;
+    // Save fetched commits into local objects directory
+    for (_, commit) in remote_index.commits {
+        repo.write_commit(&commit)?;
+    }
+
+    // Update refs/remote/origin/main (conceptually, we just update index for now)
+    let mut local_index = repo.read_index()?;
+    local_index.artifacts = remote_index.artifacts;
+    local_index.git_modules = remote_index.git_modules;
+    repo.write_index(&local_index)?;
+
+    if !remote_index.latest_commit.is_empty() {
+        repo.write_ref("refs/heads/main", &remote_index.latest_commit)?;
+    }
 
     println!("Fetch complete: local metadata updated.");
     Ok(())

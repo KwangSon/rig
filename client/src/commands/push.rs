@@ -1,3 +1,4 @@
+use crate::repository::{Index, Repository};
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use reqwest::multipart;
@@ -12,38 +13,31 @@ use protocol::{Commit, IndexFile};
 struct PushMetadata {
     pub commit: Commit,
     pub artifact_compression: HashMap<String, bool>, // id -> is_compressed
+    pub artifact_paths: HashMap<String, String>,     // id -> path
 }
 
 pub async fn run(_message_opt: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     let current_dir = std::env::current_dir()?;
-    let rig_dir = current_dir.join(".rig");
-    if !rig_dir.exists() {
-        return Err("Not a rig repository (no .rig directory found)".into());
-    }
+    let repo = Repository::open(&current_dir)?;
 
-    // Read local index.json
-    let index_path = rig_dir.join("index.json");
-    let index_content = fs::read_to_string(&index_path)
-        .map_err(|e| format!("Failed to read local index.json: {}", e))?;
-    let mut local_index: IndexFile = serde_json::from_str(&index_content)
-        .map_err(|e| format!("Failed to parse local index.json: {}", e))?;
+    let mut local_index = repo.read_index()?;
+    let config = repo.read_config()?;
 
-    if local_index.latest_commit.is_empty() {
-        return Err("No local commits to push. Run 'rig commit' first.".into());
-    }
+    let head_hash = match repo.head_commit()? {
+        Some(hash) => hash,
+        None => return Err("No local commits to push. Run 'rig commit' first.".into()),
+    };
 
-    let commit = local_index
-        .commits
-        .get(&local_index.latest_commit)
-        .ok_or("Latest commit not found locally")?
-        .clone();
+    let commit = repo
+        .read_commit(&head_hash)?
+        .ok_or("Latest commit not found locally")?;
 
     println!(
         "Preparing to push commit: {} ('{}')",
         commit.hash, commit.message
     );
 
-    let server_url = local_index
+    let server_url = config
         .server_url
         .as_ref()
         .ok_or("Server URL not configured")?;
@@ -55,6 +49,7 @@ pub async fn run(_message_opt: Option<String>) -> Result<(), Box<dyn std::error:
 
     // 1. Prepare Metadata and artifacts info
     let mut artifact_compression = HashMap::new();
+    let mut artifact_paths_map = HashMap::new();
     let mut artifact_data = Vec::new();
     let mut artifact_paths = Vec::new();
 
@@ -94,6 +89,7 @@ pub async fn run(_message_opt: Option<String>) -> Result<(), Box<dyn std::error:
             }
 
             artifact_compression.insert(artifact_id.clone(), is_compressed);
+            artifact_paths_map.insert(artifact_id.clone(), artifact_details.path.clone());
             artifact_data.push((artifact_id.clone(), file_data));
             artifact_paths.push(local_path);
         }
@@ -111,6 +107,7 @@ pub async fn run(_message_opt: Option<String>) -> Result<(), Box<dyn std::error:
     let push_metadata = PushMetadata {
         commit: commit.clone(),
         artifact_compression,
+        artifact_paths: artifact_paths_map,
     };
     form = form.part(
         "metadata",
@@ -124,7 +121,7 @@ pub async fn run(_message_opt: Option<String>) -> Result<(), Box<dyn std::error:
     }
 
     // 3. Send PushRequest to server
-    let push_url = format!("{}/api/v1/{}/push", server_url, local_index.project);
+    let push_url = format!("{}/api/v1/{}/push", server_url, config.project);
     println!("-> Sending push request (multipart) to server...");
 
     let resp = client.post(&push_url).multipart(form).send().await?;
@@ -141,27 +138,37 @@ pub async fn run(_message_opt: Option<String>) -> Result<(), Box<dyn std::error:
         authoritative_commit.hash
     );
 
-    // 3. Synchronize local state
-    let remote_index_url = format!("{}/api/v1/{}/index.json", server_url, local_index.project);
+    // 4. Synchronize local state
+    let remote_index_url = format!("{}/api/v1/{}/index.json", server_url, config.project);
     let remote_resp = client.get(&remote_index_url).send().await?;
     if remote_resp.status().is_success() {
         let remote_index: IndexFile = remote_resp.json().await?;
+
         local_index.artifacts = remote_index.artifacts;
-        local_index.commits = remote_index.commits;
-        local_index.latest_commit = remote_index.latest_commit;
+        local_index.git_modules = remote_index.git_modules;
+
+        repo.write_index(&local_index)?;
+
+        for (_, c) in remote_index.commits {
+            repo.write_commit(&c)?;
+        }
+
+        if !remote_index.latest_commit.is_empty() {
+            repo.write_ref("refs/heads/main", &remote_index.latest_commit)?;
+            // If we're on a detached head or another branch, pushing updates the server's main.
+            // In a better flow, it would push to a specific branch. For now, align with `main`.
+
+            // Just ensure HEAD isn't pointing to a detached state of an old commit if we just pushed main.
+            // A more robust push respects current branch, but we'll leave that for the branch.rs implementation.
+        }
     }
 
-    // 4. Set files back to read-only
+    // 5. Set files back to read-only
     for path in artifact_paths {
         if let Ok(mut perms) = fs::metadata(&path).map(|m| m.permissions()) {
             perms.set_readonly(true);
             let _ = fs::set_permissions(&path, perms);
         }
     }
-
-    // Persist local index
-    fs::write(&index_path, serde_json::to_string_pretty(&local_index)?)?;
-
-    println!("Push completed and synchronized with server.");
     Ok(())
 }

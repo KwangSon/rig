@@ -1,8 +1,8 @@
-use protocol::IndexFile;
+use crate::repository::{Index, Repository};
 use std::fs;
 use std::path::PathBuf;
 
-fn resolve_artifact_id(index: &IndexFile, query: &str) -> Option<String> {
+fn resolve_artifact_id(index: &Index, query: &str) -> Option<String> {
     if index.artifacts.contains_key(query) {
         return Some(query.to_string());
     }
@@ -19,13 +19,8 @@ pub async fn run(src: PathBuf, dst: PathBuf) -> Result<(), Box<dyn std::error::E
     println!("Running rig mv: {} -> {}", src_str, dst_str);
 
     let current_dir = std::env::current_dir()?;
-    let rig_dir = current_dir.join(".rig");
-    if !rig_dir.exists() {
-        return Err("Not a rig repository".into());
-    }
-
-    let index_path = rig_dir.join("index.json");
-    let mut local_index: IndexFile = serde_json::from_str(&fs::read_to_string(&index_path)?)?;
+    let repo = Repository::open(&current_dir)?;
+    let mut local_index = repo.read_index()?;
 
     if let Some(id) = resolve_artifact_id(&local_index, &src_str) {
         let artifact = local_index.artifacts.get_mut(&id).unwrap();
@@ -56,8 +51,8 @@ pub async fn run(src: PathBuf, dst: PathBuf) -> Result<(), Box<dyn std::error::E
             println!("   Renamed local file.");
         }
 
-        fs::write(&index_path, serde_json::to_string_pretty(&local_index)?)?;
-        println!("   Metadata updated in index.json (ID: {})", id);
+        repo.write_index(&local_index)?;
+        println!("   Metadata updated in local index (ID: {})", id);
     } else {
         return Err(format!("Artifact '{}' not found", src_str).into());
     }

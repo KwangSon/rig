@@ -1,4 +1,4 @@
-use protocol::IndexFile;
+use crate::repository::Repository;
 use std::fs;
 use std::path::PathBuf;
 
@@ -6,23 +6,20 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("Running rig status (local)...");
 
     let current_dir = std::env::current_dir()?;
-    let rig_dir = current_dir.join(".rig");
+    let repo = Repository::open(&current_dir)?;
 
-    if !rig_dir.exists() || !rig_dir.is_dir() {
-        return Err(
-            "Not a rig repository (or not in a rig repository). The .rig directory was not found."
-                .into(),
-        );
-    }
+    // 1. Read local index, head commit, and config
+    let local_index = repo.read_index()?;
+    let config = repo.read_config()?;
 
-    // 1. Read local .rig/index.json
-    let index_path = rig_dir.join("index.json");
-    let index_content = fs::read_to_string(&index_path)
-        .map_err(|e| format!("Failed to read local index.json: {}", e))?;
-    let local_index: IndexFile = serde_json::from_str(&index_content)
-        .map_err(|e| format!("Failed to parse local index.json: {}", e))?;
+    // Read the actual Commit object string from the hash stored in HEAD
+    let latest_commit = if let Ok(Some(hash)) = repo.head_commit() {
+        repo.read_commit(&hash).unwrap_or(None)
+    } else {
+        None
+    };
 
-    println!("Project: {}", local_index.project);
+    println!("Project: {}", config.project);
 
     // 2. Scan workspace for files
     let mut untracked_files = Vec::new();
@@ -50,7 +47,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         results
     }
 
-    let latest_commit = local_index.commits.get(&local_index.latest_commit);
     let all_workspace_files = collect_files(&current_dir, &current_dir);
 
     // 3. Compare with local index
@@ -60,7 +56,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(artifact) = local_index.artifacts.get(&path_str) {
             if artifact.latest == 0 {
                 // If it's in the latest commit, it's "committed but not pushed"
-                let in_commit = latest_commit.is_some_and(|c| c.artifacts.contains_key(&path_str));
+                let in_commit = latest_commit
+                    .as_ref()
+                    .is_some_and(|c| c.artifacts.contains_key(&path_str));
                 if in_commit {
                     committed_files.push(path_str);
                 } else {
