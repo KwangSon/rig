@@ -72,7 +72,9 @@ pub struct IndexFile {
     pub project: String,
     pub server_url: Option<String>,
     pub username: Option<String>,
-    pub latest_commit: String,
+    pub latest_commit: String, // Kept for legacy compatibility
+    #[serde(default)]
+    pub refs: HashMap<String, String>, // branch_path -> commit_hash (e.g. "refs/heads/main" -> "abc1234")
     pub artifacts: HashMap<String, Artifact>,
     #[serde(default)]
     pub git_modules: HashMap<String, GitModule>,

@@ -50,15 +50,23 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let all_workspace_files = collect_files(&current_dir, &current_dir);
 
     // 3. Compare with local index
+    let mut path_to_artifact = std::collections::HashMap::new();
+    let mut artifact_id_for_path = std::collections::HashMap::new();
+    for (id, artifact) in &local_index.artifacts {
+        path_to_artifact.insert(artifact.path.as_str(), artifact);
+        artifact_id_for_path.insert(artifact.path.as_str(), id.clone());
+    }
+
     for rel_path in &all_workspace_files {
         let path_str = rel_path.to_string_lossy().to_string();
 
-        if let Some(artifact) = local_index.artifacts.get(&path_str) {
+        if let Some(artifact) = path_to_artifact.get(path_str.as_str()) {
             if artifact.latest == 0 {
                 // If it's in the latest commit, it's "committed but not pushed"
+                let artifact_id = artifact_id_for_path.get(path_str.as_str()).unwrap();
                 let in_commit = latest_commit
                     .as_ref()
-                    .is_some_and(|c| c.artifacts.contains_key(&path_str));
+                    .is_some_and(|c| c.artifacts.contains_key(artifact_id));
                 if in_commit {
                     committed_files.push(path_str);
                 } else {

@@ -252,7 +252,10 @@ pub async fn run(
             repo.write_commit(&commit)?;
         }
 
-        if !remote_index.latest_commit.is_empty() {
+        for (ref_name, hash) in &remote_index.refs {
+            repo.write_ref(ref_name, hash)?;
+        }
+        if remote_index.refs.is_empty() && !remote_index.latest_commit.is_empty() {
             repo.write_ref("refs/heads/main", &remote_index.latest_commit)?;
         }
 

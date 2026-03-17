@@ -14,6 +14,7 @@ struct PushMetadata {
     pub commit: Commit,
     pub artifact_compression: HashMap<String, bool>, // id -> is_compressed
     pub artifact_paths: HashMap<String, String>,     // id -> path
+    pub ref_name: Option<String>,
 }
 
 pub async fn run(_message_opt: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
@@ -104,10 +105,16 @@ pub async fn run(_message_opt: Option<String>) -> Result<(), Box<dyn std::error:
     let mut form = multipart::Form::new();
 
     // Add metadata part
+    let head_ref = repo
+        .read_head()?
+        .strip_prefix("ref: ")
+        .map(|s| s.to_string());
+
     let push_metadata = PushMetadata {
         commit: commit.clone(),
         artifact_compression,
         artifact_paths: artifact_paths_map,
+        ref_name: head_ref,
     };
     form = form.part(
         "metadata",
@@ -154,12 +161,14 @@ pub async fn run(_message_opt: Option<String>) -> Result<(), Box<dyn std::error:
         }
 
         if !remote_index.latest_commit.is_empty() {
-            repo.write_ref("refs/heads/main", &remote_index.latest_commit)?;
-            // If we're on a detached head or another branch, pushing updates the server's main.
-            // In a better flow, it would push to a specific branch. For now, align with `main`.
-
-            // Just ensure HEAD isn't pointing to a detached state of an old commit if we just pushed main.
-            // A more robust push respects current branch, but we'll leave that for the branch.rs implementation.
+            // Wait, we need to sync remote refs!
+            for (ref_name, hash) in &remote_index.refs {
+                repo.write_ref(ref_name, hash)?;
+            }
+            if remote_index.refs.is_empty() {
+                // Fallback for legacy pushed projects
+                repo.write_ref("refs/heads/main", &remote_index.latest_commit)?;
+            }
         }
     }
 

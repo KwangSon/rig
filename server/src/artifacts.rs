@@ -5,6 +5,7 @@ use axum::{
 };
 use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Serialize};
+use sha1::Digest;
 use std::fs;
 
 use crate::{AppState, LockRequest, LockResponse, SharedState, UnlockRequest};
@@ -571,6 +572,15 @@ fn persist_index(app_state: &AppState) -> Result<(), String> {
     }
     index_value["git_modules"] = serde_json::Value::Object(modules_map);
 
+    // Persist refs
+    let mut refs_map = serde_json::Map::new();
+    if let Some(refs_obj) = index_value.get("refs").and_then(|v| v.as_object()) {
+        for (k, v) in refs_obj {
+            refs_map.insert(k.clone(), v.clone());
+        }
+    }
+    index_value["refs"] = serde_json::Value::Object(refs_map);
+
     fs::write(
         &index_path,
         serde_json::to_string_pretty(&index_value).map_err(|e| e.to_string())?,
@@ -588,6 +598,8 @@ pub struct PushMetadata {
     pub artifact_compression: std::collections::HashMap<String, bool>,
     #[serde(default)]
     pub artifact_paths: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub ref_name: Option<String>,
 }
 
 pub async fn push_handler(
@@ -638,13 +650,21 @@ pub async fn push_handler(
 
     // Read index.json to get current state
     let index_path = app_state.project_dir.join("index.json");
+    let mut server_refs = std::collections::HashMap::new();
     if let Ok(index_content) = fs::read_to_string(&index_path)
         && let Ok(index_val) = serde_json::from_str::<serde_json::Value>(&index_content)
-        && let Ok(c) = serde_json::from_value::<std::collections::HashMap<String, protocol::Commit>>(
-            index_val["commits"].clone(),
-        )
     {
-        commits_map = c;
+        if let Ok(c) = serde_json::from_value::<std::collections::HashMap<String, protocol::Commit>>(
+            index_val["commits"].clone(),
+        ) {
+            commits_map = c;
+        }
+
+        if let Ok(r) = serde_json::from_value::<std::collections::HashMap<String, String>>(
+            index_val["refs"].clone(),
+        ) {
+            server_refs = r;
+        }
     }
 
     // 2. Process updated artifacts
@@ -711,17 +731,54 @@ pub async fn push_handler(
         }
     }
 
-    // 3. Update commits
-    let new_commit = payload.commit;
+    // 3. Update commits with true server revisions and recalculate authoritative hash
+    let mut new_commit = payload.commit;
+
+    // Replace latest=0 (or any local assumptions) with the real server 'latest' revision
+    for (artifact_id, rev) in new_commit.artifacts.iter_mut() {
+        if let Some(artifact) = app_state.artifacts.get(artifact_id) {
+            *rev = artifact.latest;
+        }
+    }
+
+    // Recompute the authoritative hash identical to the client's `commit.rs`
+    let mut hasher = sha1::Sha1::new();
+    sha1::Digest::update(
+        &mut hasher,
+        new_commit
+            .parent
+            .as_ref()
+            .unwrap_or(&"".to_string())
+            .as_bytes(),
+    );
+    sha1::Digest::update(&mut hasher, new_commit.message.as_bytes());
+    sha1::Digest::update(&mut hasher, new_commit.author.as_bytes());
+    sha1::Digest::update(
+        &mut hasher,
+        serde_json::to_string(&new_commit.artifacts)
+            .unwrap()
+            .as_bytes(),
+    );
+    new_commit.hash = format!("{:x}", sha1::Digest::finalize(hasher));
+
     let new_hash = new_commit.hash.clone();
     commits_map.insert(new_hash.clone(), new_commit.clone());
+
+    // Update branch ref if this push specifies a specific branch (we check payload.branch)
+    // For now we will assume the branch comes from the push payload or default to 'refs/heads/main'
+    // To properly support branches, `PushMetadata` needs a `ref_name` field.
+    let ref_name = payload
+        .ref_name
+        .unwrap_or_else(|| "refs/heads/main".to_string());
+    server_refs.insert(ref_name, new_hash.clone());
 
     // Update index.json
     let mut full_index: protocol::IndexFile = protocol::IndexFile {
         project: project.clone(),
         server_url: None,
         username: None,
-        latest_commit: new_hash.clone(),
+        latest_commit: new_hash.clone(), // Legacy compatibility
+        refs: server_refs,
         artifacts: app_state.artifacts.clone(),
         git_modules: app_state.git_modules.clone(),
         commits: commits_map,

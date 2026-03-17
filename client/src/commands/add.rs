@@ -61,6 +61,22 @@ pub async fn run(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         let already_has_hash = artifact.revisions.iter().any(|r| r.hash == hash);
         if !already_has_hash {
             println!("-> New local changes detected for existing artifact.");
+
+            // Increment the rev number (0 means unpushed in local context, but the rev object needs a local ID)
+            // Actually, rig client uses 0 as latest. But revs are 0, 1, 2...
+            // Let's just create a new Revision entry. Wait, how did commit.rs handle this?
+            // commit.rs looks for artifact.latest == 0 to push. So we MUST set latest = 0!
+
+            // Wait, previous commits use rev: 0 for the FIRST commit.
+            // We just need a dummy rev for the local object until commit/push assigns the real sever rev.
+            // Let's use rev: 0 for unpushed changes.
+            artifact.revisions.retain(|r| r.rev != 0); // remove any old unpushed rev
+            artifact.revisions.push(Revision {
+                rev: 0,
+                hash: hash.clone(),
+                compressed: false,
+            });
+            artifact.latest = 0;
         }
     } else {
         // Create a new unique ID
