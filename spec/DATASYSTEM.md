@@ -4,11 +4,11 @@ This document outlines the underlying data storage and synchronization architect
 
 ## Client-Server Symmetry
 
-The Rig architecture is built upon a symmetric data model. The core storage structures, metadata tracking, and file organizations are virtually identical across both the client and the server. This identical layout ensures consistency, simplifies the synchronization logic, and provides a unified mental model for the entire repository system.
+The Rig architecture is built upon a symmetric metadata model. The core metadata tracking and internal index organizations are virtually identical across both the client and the server. This identical layout ensures consistency and simplifies the synchronization logic. However, the physical storage of binary data differs: the server maintains a multi-revision object store in `artifacts/`, while the client only stores the current working revision of a binary in the user's workspace to save disk space.
 
 ## Comparison with the Git File System
 
-Rig's underlying file system takes heavy inspiration from Git but introduces two critical architectural differences explicitly designed to support collaborative design workflows and large binary assets:
+Rig's underlying file system takes heavy inspiration from Git but introduces several critical architectural differences explicitly designed to support collaborative design workflows and large binary assets:
 
 ### 1. Granular Revision Tracking
 Unlike Git, which uses a Merkle tree to track snapshots of the entire repository state for every commit, Rig maintains **per-file revision and tracking information**. Each individual artifact (file) has its own distinct revision history, locking state, and metadata. This granular tracking enables efficient parallel collaboration and specific file-level rollbacks without needing to check out the entire project tree.
@@ -29,76 +29,6 @@ This means if an unstable network connection drops—or if a user hits "pause/st
 
 ## Client-Side Storage Structure
 
-The client's `.rig/` directory is always located at the **project root**, following the same convention as Git's `.git/`.
-
-```text
-my-project/
-├── .rig/
-│   ├── index        ← Path → artifact_id mapping, revision, lock state, placeholder state, staged hash
-│   ├── config       ← Remote server address, user profile, branch info
-│   └── objects/     ← Local commit graph and staged metadata (no binary blobs)
-│
-├── assets/
-│   ├── weapon.png        ← Real binary (pulled, rw- if locked / r-- otherwise)
-│   ├── character.png     ← 0-byte placeholder (not yet pulled, r--)
-│   └── background.png    ← Real binary (pulled, r--)
-```
-
-### Design Philosophy: Server as the Single Source of Truth
-
-The client does **not** maintain a local binary object cache. The working directory file is the **only** local copy of the binary. This is an intentional design decision:
-
-- All revision history is owned exclusively by the server's `artifacts/` directory.
-- If a working directory file is accidentally deleted after a successful `push`, it can always be restored via `rig pull`.
-- If a working directory file is deleted after a local `commit` but before `push`, the data is unrecoverable locally. The user must discard the local commit and re-edit from the last pushed revision. This is an accepted tradeoff — the complexity of maintaining a local object cache is not justified for a binary asset workflow where `push` is expected to follow `commit` promptly.
-
-### Strict State Machine: Preventing Invalid States
-
-File permissions (`r--` / `rw-`) are a **UX hint only** — some tools ignore `chmod`, and Windows permission semantics differ from POSIX. All actual access control decisions are made against the **`.rig/index` lock state**, not the filesystem permission. The client enforces a strict linear state machine and **rejects any operation that would produce an ambiguous or unrecoverable state**:
-
-| Attempted Action | Condition | Client Response |
-|---|---|---|
-| `rig add` | No active lock on this file (per index) | `ERROR: File is read-only. Use 'rig lock' first.` |
-| `rig add` | File is a 0-byte placeholder (per index) | `ERROR: File not downloaded. Run 'rig pull' first.` |
-| `rig commit` | double-hash mismatch (file changed during or after staging) | `ERROR: File changed after staging. Re-run 'rig add'.` |
-| `rig commit` | Staged file is missing from working directory | `ERROR: Staged file not found. File may have been deleted.` |
-| `rig pull` | Active local lock exists on target file (per index) | `ERROR: File is locked locally. Push or unlock before pulling.` |
-| `rig push` | Remote revision differs from base revision | `ERROR: Remote updated. Run 'rig pull' first.` |
-| `rig checkout` | Uncommitted local changes exist | `ERROR: Uncommitted changes. Commit or stash first.` |
-
-The only exception to the lock requirement is **new file creation**. A file that does not yet exist in the remote repository's index can be added and pushed without a lock. The server enforces a Namespace Collision Check at push time: if another user has pushed a file to the same path in the meantime, the push is hard-rejected with an error prompting the user to rename the file and retry.
-
-### Commit Atomicity and Hash Verification
-
-To guarantee that what is committed is exactly what will be pushed, Rig uses a two-phase verification strategy that balances correctness with performance:
-
-- **`rig add`**: Records the file's `mtime` and `size` into the index. No hash is computed at this stage to keep the operation fast, even for multi-gigabyte assets.
-- **`rig commit`**: Computes a **blake3** hash of the staged file **twice in succession** (double-hash). If the two hashes differ, the file was modified during the hash computation (TOCTOU), and the commit is **aborted**. If both hashes match, the hash is stored in `.rig/objects/` as part of the local commit record. The user must re-run `rig add` if the commit is aborted.
-- **`rig push`**: Transmits the pre-computed commit hash to the server alongside the binary payload. The hash is **not recomputed** at push time — the value stored at commit is reused directly.
-
-### Server-Side Upload Integrity Verification
-
-The server independently verifies every binary payload received during `rig push`:
-
-1. After receiving the complete binary upload, the server computes a **blake3** hash of the received data.
-2. The server compares this hash against the commit hash transmitted by the client.
-3. If the hashes do not match, the push is **hard-rejected**. This catches both in-transit data corruption and any client-side bugs that may have produced an inconsistent commit.
-4. Only after hash verification passes does the server write the binary to `artifacts/[artifact_id]/rev_N` and update the index.
-
-### Unpushed Commit Warning
-
-Because local commits are not backed up anywhere until `push` completes, `rig status` always surfaces a prominent warning when unpushed commits exist:
-
-```
-⚠ Unpushed commits detected — local data is NOT backed up until pushed.
-  Deleting working directory files before pushing will permanently lose data.
-  → Run 'rig push' to back up your changes to the server.
-```
-
-This warning is also displayed at the start of `rig lock` and `rig checkout` if unpushed commits are detected, ensuring the user is never silently in a vulnerable state.
-
-## Client-Side Storage Structure
-
 The client's `.rig/` directory is always located at the **project root**, following the same convention as Git's `.git/`. This is a structural requirement — it guarantees that `.rig/` and all working directory files always reside on the same filesystem, which is required for atomic file operations.
 
 ```text
@@ -112,7 +42,7 @@ my-project/
 ├── assets/
 │   ├── weapon.png                   ← Real binary (pulled, rw- if locked / r-- otherwise)
 │   ├── character.png                ← 0-byte placeholder (not yet pulled, r--)
-│   └── background.png              ← Real binary (pulled, r--)
+│   └── background.png               ← Real binary (pulled, r--)
 ```
 
 ---
@@ -460,7 +390,7 @@ Tracks explicit, granular file locks to prevent concurrent modifications on indi
 - `project_id` (UUID, Foreign Key → `projects.id`)
 - `artifact_id` (String)
 - `branch` (String)
-- `locked_by` (String)
+- `locked_by` (UUID, Foreign Key → `users.id`)
 - `lock_generation_id` (UUID, Auto-generated token for push-time validation)
 - `locked_at` (Timestamp)
 - `updated_at` (Timestamp)
