@@ -20,6 +20,13 @@ When a repository is initially cloned or fetched:
 - The actual physical files manifest as **0-byte placeholders** in the working directory.
 - The real file payload is downloaded and populated *only* when an explicit `pull` is executed on that specific artifact or directory.
 
+### 3. Selective Synchronization (Partial Pull)
+A major departure from Git's "all-or-nothing" clone/pull requirement is Rig's ability to fetch data à la carte. Because file payloads are decoupled from the core tree metadata, users can choose to download only the specific files or directories they need to work on (`rig pull <specific_path>`). This drastically reduces network bandwidth and local disk usage for massive projects containing hundreds of gigabytes of assets, as you are never forced to download files you don't intend to use.
+
+### 4. Resumable Chunked Downloading
+When a `pull` command is executed on very large assets, Rig prevents failures or bottlenecks by transmitting the data in **compressed chunks** rather than a single monolithic stream. 
+This means if an unstable network connection drops—or if a user hits "pause/stop" mid-download—the system keeps track of the chunks already successfully written locally. When the `pull` is restarted, Rig seamlessly resumes from the exact chunk offset where it left off, rather than restarting the massive download from 0%.
+
 ## Server-Side Storage Structure
 
 On the server, data is partitioned and isolated by `project_id`. This multi-tenant design ensures that all files and metadata are strictly scoped to their respective projects. 
@@ -34,8 +41,8 @@ The internal storage layout for a specific project looks like this:
 
 ### The `.rig/` Directory
 This directory serves the exact same purpose as it does on the client. It contains all the structural metadata for the project, including:
-- `index.json`: Maps logical file paths to their artifact hashes, sizes, current revisions, and locking states.
-- `config.json`: Project-specific configuration containing remote server mapping (if applicable) and branch schemas.
+- `index`: Functions similarly to Git's Staging Area (`.git/index`), but extended for Rig. It maps logical file paths to their artifact hashes, sizes, current revisions, locking states, and tracks lazy-load data availability.
+- `config`: Functions identically to Git's local configuration (`.git/config`). It is a project-specific configuration containing remote server mappings (`[remote]`), user profiles, and branch schemas.
 - **Commit/Revision Graph**: Maintains the global history pointer of what changed and when.
 
 ### The `artifacts/` Directory
@@ -43,7 +50,43 @@ This directory acts as the object store mechanism for the project. While the `.r
 - Files stored here are usually named or hashed by their artifact ID to decouple the physical storage from the logical file path. 
 - These are the "real" file payloads that are transferred to users when they perform a `pull` request.
 
-## DB schema
+## 3. Authentication and Author Identity
+
+To interact with the remote server safely and manage author metadata without reinventing the wheel, Rig employs a hybrid approach blending native Git paradigms with robust security standards.
+
+### Identity Sourcing (`.gitconfig`)
+For local commits and author identity tracking, Rig **automatically inherits your global `~/.gitconfig` configurations**. When you create a local `rig commit` or `rig push` to the server, Rig reads the `[user]` section (specifically `name` and `email`) from your `~/.gitconfig` and attaches these values to your Rig commits. 
+This means you do not need to configure an author name specifically for Rig; your existing Git identity translates seamlessly.
+
+### Secure Remote Operations (SSH Keys)
+When performing network operations like `pull` or `push`, relying on HTTP basic authentication (usernames and passwords) over arbitrary network requests is considered a security risk.
+Instead, **Rig requires SSH key-based authentication for remote operations**.
+1. **Pre-registration:** Users must first create a web account on the Rig server.
+2. **Key Registration:** Before executing any `rig clone`, `pull`, or `push` command, the user must upload their public SSH key to the Rig server dashboard.
+3. **Execution:** All rigorous network operations authorize the client by verifying their local private SSH key against the registered public key (`ssh_keys` database table). 
+
+This ensures password-less, cryptographically secure collaboration.
+
+## 4. Role-Based Access Control (RBAC) & Permissions
+
+As defined in the `permissions` and `users` tables, Rig enforces strict Role-Based Access Control. Because Rig relies on exclusive locks (changing file permissions from `r--` to `rw-`), concurrent modification conflicts are structurally impossible. However, this introduces the need for robust access and override management:
+
+- **Read Access (`read`)**: Users with this level can only perform non-mutating operations: `clone`, `fetch`, `pull`, and `log`. They cannot acquire locks.
+- **Write Access (`write`)**: In addition to read privileges, these users can perform mutating operations on the repository: `lock`, `add`, `commit`, and `push`.
+- **Admin Access (`admin`)**: Admins have full control over the project. Crucially, because there are no timeouts on acquired locks, if a user acquires a lock and becomes unavailable (e.g., leaves the company or goes on vacation), an Admin must intervene. **Only users with the `admin` role can execute `rig unlock <path> --force` to forcibly seize and release a lock** held by another user.
+
+## 5. Source Code vs. Asset Segregation
+
+A core philosophy of Rig is that it does **not** attempt to replace Git for source code version control. Text-based source code (e.g., `.rs`, `.py`, `.js`, `.cpp`) relies heavily on line-by-line diffing, auto-merging, and branching—features optimized for Git. 
+
+If a user attempts to run `rig add` on source code files, the Rig client will explicitly emit a warning.
+The intended workspace architecture for a project is:
+- **Binary Assets & Large Files**: Tracked natively by Rig's granular, lock-based `.rig/index`.
+- **Source Code**: Tracked in standard Git repositories, which are then mounted into the Rig workspace using the `rig gitmodule` system.
+
+This ensures that artists/designers get the binary-locking UX they need, while software engineers retain the standard Git tooling they expect, gracefully fused in one contiguous workspace directory.
+
+## 6. DB schema
 
 The server relies on a PostgreSQL database (`postgresql://kwang@localhost/rig`) to manage system state, authentication, and access control. 
 The core tables are:
