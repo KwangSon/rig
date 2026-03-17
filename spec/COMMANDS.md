@@ -28,19 +28,19 @@ This document outlines the complete specifications, operational patterns, and si
 The Rig system inherently uses an explicit Lock/Unlock mechanism for version control in collaborative scenarios.
 
 ### `rig lock <path>`
-- **Description**: Acquires an exclusive lock to prevent other users from concurrently editing the artifact.
+- **Description**: Acquires an exclusive lock to prevent other users from concurrently editing the artifact on the current branch.
 - **Specification & Side-effects**:
-  - 🔒 **Permission Change**: Upon successfully acquiring the lock from the server, the local file system permissions for the target file are changed from **read-only (`r--`) to read/write (`rw-`)**.
+  - 🔒 **Permission Change**: Upon successfully acquiring the branch-isolated lock from the server (bound securely to `artifact_id` and the current branch name), the local file system permissions for the target file are changed from **read-only (`r--`) to read/write (`rw-`)**.
   - **Automatic Data Fetch**: If the targeted artifact is currently a 0-byte placeholder (lazy-loaded state), `rig lock` will automatically trigger a background `pull` to fetch the real file payload before granting `rw-` access.
   - If another user already holds the lock, the server will deny the request, and the local file will remain read-only.
   - This command must precede any file modification or the use of the `add` command.
 
 ### `rig unlock <path> [--force]`
-- **Description**: Releases the lock on an artifact after editing is complete, allowing other users to acquire a lock and modify it.
+- **Description**: Releases the branch-specific lock on an artifact after editing is complete, allowing other users to acquire a lock on this branch and modify it.
 - **Specification & Side-effects**:
   - 🔓 **Permission Change**: Upon successful unlock, the local file permissions are **reverted to read-only (`r--`)** to prevent further unauthorized modifications.
-  - The `--force` (`-f`) flag forcibly breaks a lock held by another user. Note that this may fail depending on permission controls or server settings.
-  - It is highly recommended to commit and push local changes before unlocking. Uncommitted changes might be overwritten by other users if the lock is released prematurely.
+  - **Local Status Check (Enforce Push on Unlock)**: Before releasing the lock, the client verifies the local `.rig/` index *for the currently active branch*. If the artifact has pending local commits on this branch that have not been pushed to the server, the command **aborts with a hard error**. Because locks are securely isolated by branch, checking only the current branch's local index is mathematically safe and prevents cross-branch bypasses.
+  - The `--force` (`-f`) flag forcibly breaks a branch-isolated lock held by another user from the server-side. Note that this may fail depending on permission controls or server settings. An offline user who has their lock forcefully revoked will have their subsequent `push` rejected due to Lock Generation ID mismatch.
 
 ---
 
@@ -68,6 +68,7 @@ The Rig system inherently uses an explicit Lock/Unlock mechanism for version con
 - **Description**: Uploads local commits and changes to the remote server.
 - **Specification & Side-effects**:
   - If the `--message` parameter is omitted, the most recent local commit message is used automatically.
+  - **Push-Time Lock Validation**: The client transmits its known Lock Generation ID for modified artifacts. The server **hard-rejects the push** if the lock token does not match the server's current state (e.g., if an Admin performed a force-unlock while the user was offline).
   - Creates a new revision on the server. To avoid synchronization conflicts, it is recommended to `pull` the latest changes before using `push`.
 
 ### `rig pull <path> [revision] [--out <out_path>]`
@@ -118,6 +119,7 @@ The Rig system inherently uses an explicit Lock/Unlock mechanism for version con
 - **Description**: Moves or renames a tracked artifact.
 - **Specification & Side-effects**:
   - Physically moves the file within the local file system and automatically updates the tracked path within the internal `rig` index.
+  - **Lock Continuity**: Because server-side locks are bound to the immutable `artifact_id` rather than the string path, `rig mv` can operate purely locally and offline without orphaning the server lock. The lock remains securely attached to the data payload regardless of its local path.
 
 ---
 

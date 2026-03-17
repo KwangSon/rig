@@ -36,19 +36,25 @@ The internal storage layout for a specific project looks like this:
 ```text
 [project_id]/
  ├── .rig/         # Core metadata, configuration, index, and commit history
- └── artifacts/    # The physical object store for actual file data
+ └── artifacts/    # The physical object store for actual file data, strictly keyed by artifact ID
+      ├── [artifact_id_1]/
+      │    ├── rev_1
+      │    └── rev_2
+      └── [artifact_id_2]/
+           └── rev_1
 ```
 
 ### The `.rig/` Directory
 This directory serves the exact same purpose as it does on the client. It contains all the structural metadata for the project, including:
-- `index`: Functions similarly to Git's Staging Area (`.git/index`), but extended for Rig. It maps logical file paths to their artifact hashes, sizes, current revisions, locking states, and tracks lazy-load data availability.
+- `index`: Functions similarly to Git's Staging Area (`.git/index`), but extended for Rig. It maps logical file paths (e.g., `assets/weapon.png`) to their immutable `artifact_id`, size, current revisions, locking states, and tracks lazy-load data availability.
 - `config`: Functions identically to Git's local configuration (`.git/config`). It is a project-specific configuration containing remote server mappings (`[remote]`), user profiles, and branch schemas.
 - **Commit/Revision Graph**: Maintains the global history pointer of what changed and when.
 
 ### The `artifacts/` Directory
-This directory acts as the object store mechanism for the project. While the `.rig/` directory knows *about* the files, the `artifacts/` directory holds the concrete file data (blobs). 
-- Files stored here are usually named or hashed by their artifact ID to decouple the physical storage from the logical file path. 
-- These are the "real" file payloads that are transferred to users when they perform a `pull` request.
+This directory acts as the object store mechanism for the project, completely decoupled from string-based logical file paths. While the `.rig/index` knows *about* the file names, the `artifacts/` directory holds the concrete binary data organized purely by continuous identifiers.
+- **Artifact-ID Grouping:** Each tracked file has a dedicated sub-directory named after its immutable `artifact_id` (e.g., `artifacts/e3b0c442../`).
+- **Revision Blobs:** Inside each `artifact_id` folder, physical binary data is stored and designated by its revision history (e.g., `rev_1`, `rev_2`). This allows for instantaneous per-file rollbacks without traversing a repository-wide snapshot tree.
+- These are the "real" file payloads that are transferred to users when they perform a `pull` request. For example, `rig pull character.png@rev_1` simply reaches into `artifacts/[linked_artifact_id]/rev_1` and streams that specific payload chunk to the client.
 
 ## 3. Authentication and Author Identity
 
@@ -74,6 +80,14 @@ As defined in the `permissions` and `users` tables, Rig enforces strict Role-Bas
 - **Read Access (`read`)**: Users with this level can only perform non-mutating operations: `clone`, `fetch`, `pull`, and `log`. They cannot acquire locks.
 - **Write Access (`write`)**: In addition to read privileges, these users can perform mutating operations on the repository: `lock`, `add`, `commit`, and `push`.
 - **Admin Access (`admin`)**: Admins have full control over the project. Crucially, because there are no timeouts on acquired locks, if a user acquires a lock and becomes unavailable (e.g., leaves the company or goes on vacation), an Admin must intervene. **Only users with the `admin` role can execute `rig unlock <path> --force` to forcibly seize and release a lock** held by another user.
+
+### Mitigating Concurrency with Offline Commits
+While exclusive locks prevent simultaneous online edits, an architectural challenge arises when an offline user holds a lock on a binary asset, continues to create local `commit`s, but an Admin forces an unlock (`--force`). If another user acquires the freed lock and pushes, the offline user's subsequent push would cause an un-mergeable binary conflict. 
+
+To structurally prevent this data loss while preserving the ability to create offline commits (for branching and stashing), Rig enforces **Push-Time Lock Validation (Revocation Tokens):**
+- **Lock Generation ID:** The `file_locks` table tracks a generation ID (or token) for every lock. 
+- **Validation on Push:** When a client executes `rig push`, it transmits the Lock Generation ID it held at the time of the commits. 
+- **Hard Rejection:** The server strictly compares the client's token against the current database state. If the server's lock state has mutated (e.g., forced unlocked and re-acquired by someone else), the server **hard-rejects the push**. The offline user's data remains safe locally, but they are prevented from corrupting the master server state.
 
 ## 5. Source Code vs. Asset Segregation
 
@@ -111,22 +125,24 @@ Stores high-level repository/project information.
 Provides Role-Based Access Control (RBAC) tying users to projects.
 - `id` (UUID, Primary Key)
 - `user_id` (UUID, Foreign Key → `users.id`)
-- `project` (Text)
+- `project_id` (UUID, Foreign Key → `projects.id`)
 - `access` (Text: 'read', 'write', or 'admin')
 
 ### `ssh_keys`
 Stores public SSH keys for secure artifact and git submodule access management.
 - `id` (UUID, Primary Key)
-- `project` (String, Foreign Key → `projects.name`)
+- `project_id` (UUID, Foreign Key → `projects.id`)
 - `title` (String)
 - `key_data` (Text)
 - `created_at` (Timestamp)
 
 ### `file_locks`
-Tracks explicit, granular file locks to prevent concurrent modifications on individual artifacts.
+Tracks explicit, granular file locks to prevent concurrent modifications on individual artifacts. Locks are tied to the immutable `artifact_id` rather than a mutable string path, ensuring locks remain valid even if the file is moved or renamed locally via `rig mv`. Furthermore, locks are **branch-isolated**, meaning a lock is granted for a specific artifact *on a specific branch*.
 - `id` (UUID, Primary Key)
-- `project` (String, Foreign Key → `projects.name`)
-- `file_path` (String)
+- `project_id` (UUID, Foreign Key → `projects.id`)
+- `artifact_id` (String)
+- `branch` (String)
 - `locked_by` (String)
+- `lock_generation_id` (UUID, Auto-generated token for push-time validation)
 - `locked_at` (Timestamp)
 - `updated_at` (Timestamp)
