@@ -11,7 +11,7 @@ This document outlines the complete specifications, operational patterns, and si
 | `rig add` | Stages a modified or new artifact into the index | - | - |
 | `rig commit` | Records local changes into a new local revision | - | - |
 | `rig push` | Uploads local revisions to the remote server | - | - |
-| `rig pull` | Downloads file data for specific artifacts | Yes (unless locked) | - |
+| `rig pull` | Downloads file data (Blocked on locked files) | Yes (unless locked) | - |
 | `rig fetch` | Updates remote metadata without downloading data | - | - |
 | `rig status` | Displays working directory changes and lock states | - | - |
 | `rig log` | Shows history and commit logs for the repository/file | - | - |
@@ -77,8 +77,9 @@ The Rig system inherently uses an explicit Lock/Unlock mechanism for version con
 - **Description**: Fetches the latest (or specific) revision of a file/directory from the remote server and updates the local working directory.
 - **Specification & Side-effects**:
   - The `path` parameter is flexible (e.g., `file.png`, `dir/`, `*`), and revisions can be specified inline like `file.png@10`.
-  - The `--out` flag allows downloading to an alternate path to prevent overwriting existing files.
-  - Local modifications that have not been stashed or committed risk being overwritten by the remote data.
+  - **Lock Protection (Hard Block)**: `rig pull` MUST NOT overwrite any artifact that is currently **locked** in the local workspace. A locked file represents an exclusive, protected editing state. If any target artifact in the `path` is locked, the command MUST abort with a strict error: `Error: Cannot pull 'file.png' while it is locked. A locked file is protected from external changes. Please run 'rig unlock file.png' before pulling.` 
+  - The `--out` flag allows downloading to an alternate path to prevent overwriting existing files, which bypasses the local lock check as it does not affect the tracked working file.
+  - Local modifications that have not been stashed or committed risk being overwritten by the remote data (for unlocked files).
 
 ### `rig fetch`
 - **Description**: Connects to the remote server to update metadata only, without downloading file contents.

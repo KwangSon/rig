@@ -68,14 +68,16 @@ rig unlock existing_design.png
 ## 4. Workflow: Syncing and Updating
 When collaborating with others, you will frequently need to pull their changes down to your local workspace. Because Rig uses lazy-loading, pulling is how you actually download the file bytes.
 
+**Important**: You cannot `pull` an asset that you currently have **locked**. A locked file is protected from being overwritten by external changes. You must `unlock` the file first if you wish to revert your changes to the server version.
+
 ```bash
 # Option A: Check what has changed on the server without downloading heavy files
 rig fetch
 
-# Option B: Pull the actual file data for a specific asset
+# Option B: Pull the actual file data for a specific asset (fails if file is locked)
 rig pull existing_design.png
 
-# Option C: Pull all updated files in the current directory
+# Option C: Pull all updated files in the current directory (skips or fails on locked files)
 rig pull "*"
 ```
 
