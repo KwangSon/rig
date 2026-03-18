@@ -1,4 +1,4 @@
-use protocol::{Artifact, Commit, GitModule};
+pub use protocol::{Artifact, Commit, GitModule, Index};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -9,13 +9,6 @@ pub struct Config {
     pub project: String,
     pub server_url: Option<String>,
     pub username: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Default, Debug, Clone)]
-pub struct Index {
-    pub artifacts: HashMap<String, Artifact>,
-    #[serde(default)]
-    pub git_modules: HashMap<String, GitModule>,
 }
 
 pub struct Repository {
@@ -153,7 +146,7 @@ impl Repository {
         let path = self
             .rig_dir
             .join("objects")
-            .join(format!("{}.json", commit.hash));
+            .join(format!("{}.json", commit.id));
         fs::write(path, content)?;
         Ok(())
     }
@@ -181,7 +174,7 @@ impl Repository {
             if path.extension().and_then(|e| e.to_str()) == Some("json") {
                 let content = fs::read_to_string(&path)?;
                 if let Ok(commit) = serde_json::from_str::<Commit>(&content) {
-                    commits.insert(commit.hash.clone(), commit);
+                    commits.insert(commit.id.clone(), commit);
                 }
             }
         }

@@ -40,49 +40,21 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let all_files = collect_files(&current_dir, &current_dir);
     let local_index = repo.read_index()?;
 
-    // Create a reverse map from path -> artifact
-    let mut path_to_artifact = std::collections::HashMap::new();
-    for artifact in local_index.artifacts.values() {
-        path_to_artifact.insert(artifact.path.as_str(), artifact);
-    }
-
     for rel_path in all_files {
         let path_str = rel_path.to_string_lossy().to_string();
         let mut needs_add = false;
 
-        if let Some(artifact) = path_to_artifact.get(path_str.as_str()) {
-            if artifact.latest == 0 {
+        if let Some(artifact) = local_index.artifacts.get(&path_str) {
+            if artifact.revision == 0 {
                 // Tracking an unpushed file
-                println!("Condition A: latest==0 for {}", path_str);
+                println!("Condition A: revision==0 for {}", path_str);
                 needs_add = true;
             } else {
                 // Tracking a pushed file, check if modified (writable)
                 let full_path = current_dir.join(&rel_path);
                 if fs::metadata(&full_path).is_ok_and(|m| !m.permissions().readonly()) {
-                    // It's writable, but did the content actually change?
-                    if let Ok(file_data) = fs::read(&full_path) {
-                        let mut hasher = sha1::Sha1::new();
-                        sha1::Digest::update(&mut hasher, &file_data);
-                        let file_hash = format!("{:x}", sha1::Digest::finalize(hasher));
-
-                        let latest_rev =
-                            artifact.revisions.iter().find(|r| r.rev == artifact.latest);
-                        let is_modified = latest_rev.map_or(true, |r| r.hash != file_hash);
-                        println!(
-                            "Checking writable tracker file {}: hash={}, latest_hash={:?}, is_modified={}",
-                            path_str,
-                            file_hash,
-                            latest_rev.map(|r| &r.hash),
-                            is_modified
-                        );
-                        if is_modified {
-                            println!("Condition B: modified hash for {}", path_str);
-                            needs_add = true;
-                        }
-                    } else {
-                        println!("Condition C: read err for {}", path_str);
-                        needs_add = true; // Err reading, assume dirty
-                    }
+                    println!("Condition B: writable file for {}", path_str);
+                    needs_add = true;
                 }
             }
         } else {
@@ -127,49 +99,47 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Re-setup the working tree based on the original commit
     if let Some(commit_hash) = repo.head_commit()? {
         if let Some(original_commit) = repo.read_commit(&commit_hash)? {
+            use std::os::unix::fs::PermissionsExt;
             let mut index = repo.read_index()?;
-            // Remove ALL workspace files to ensure a completely clean slate
-            let all_workspace_files = collect_files(&current_dir, &current_dir);
-            for rel_path in all_workspace_files {
-                let file_path = current_dir.join(&rel_path);
+
+            // Remove currently tracked files
+            for path in index.artifacts.keys() {
+                let file_path = current_dir.join(path);
                 if file_path.exists() {
-                    if let Ok(m) = fs::metadata(&file_path) {
-                        let mut perms = m.permissions();
-                        #[allow(clippy::permissions_set_readonly_false)]
-                        perms.set_readonly(false);
-                        let _ = fs::set_permissions(&file_path, perms);
-                    }
-                    if file_path.is_dir() {
-                        let _ = fs::remove_dir_all(&file_path);
-                    } else {
-                        let _ = fs::remove_file(&file_path);
-                    }
+                    let _ = fs::set_permissions(&file_path, fs::Permissions::from_mode(0o644));
+                    let _ = fs::remove_file(&file_path);
                 }
             }
 
             // Rebuild index.artifacts from the original commit's artifacts
-            // We do not want to keep anything that was added during the stash
-            let mut original_artifacts = std::collections::HashMap::new();
+            index.artifacts.clear();
 
-            for (artifact_id, rev) in &original_commit.artifacts {
-                if let Some(mut artifact) = index.artifacts.get(artifact_id).cloned() {
-                    artifact.latest = *rev;
-                    original_artifacts.insert(artifact_id.clone(), artifact.clone());
+            for commit_artifact in &original_commit.artifacts {
+                let path = &commit_artifact.path;
+                index.artifacts.insert(
+                    path.clone(),
+                    protocol::IndexArtifact {
+                        artifact_id: commit_artifact.artifact_id.clone(),
+                        revision: commit_artifact.revision_base,
+                        local_state: "placeholder".to_string(),
+                        stage: "none".to_string(),
+                        locked: false,
+                        lock_owner: None,
+                        lock_generation: None,
+                        staged: None,
+                        moved_from: None,
+                    },
+                );
 
-                    let file_path = current_dir.join(&artifact.path);
-                    if let Some(parent) = file_path.parent() {
-                        fs::create_dir_all(parent).ok();
-                    }
-                    if fs::write(&file_path, b"").is_ok() {
-                        if let Ok(mut perms) = fs::metadata(&file_path).map(|m| m.permissions()) {
-                            perms.set_readonly(true);
-                            let _ = fs::set_permissions(&file_path, perms);
-                        }
-                    }
+                let file_path = current_dir.join(path);
+                if let Some(parent) = file_path.parent() {
+                    fs::create_dir_all(parent).ok();
+                }
+                if fs::write(&file_path, b"").is_ok() {
+                    let _ = fs::set_permissions(&file_path, fs::Permissions::from_mode(0o444));
                 }
             }
 
-            index.artifacts = original_artifacts;
             repo.write_index(&index)?;
         }
     }

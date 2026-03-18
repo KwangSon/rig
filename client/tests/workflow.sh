@@ -101,6 +101,7 @@ cat file1.txt
 
 "$RIG_BIN" lock file1.txt
 echo "Revision 2 content from clone" >> file1.txt
+"$RIG_BIN" add file1.txt
 "$RIG_BIN" commit -m "Revision 2 from cloned repository"
 "$RIG_BIN" push
 

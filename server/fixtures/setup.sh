@@ -7,23 +7,20 @@ set -e
 
 DB_NAME="rig"
 DB_URL="postgresql://kwang@localhost/$DB_NAME"
-BASE_DIR="server/examples"
-
-# --- [EDIT HERE] ---
-# You can set plain text passwords here!
-ADMIN_PASSWORD="password"
-USER1_PASSWORD="password"
-# ------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RIG_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+MIGRATIONS_DIR="$RIG_ROOT/server/migrations"
+BASE_DIR="$RIG_ROOT/server/examples"
 
 echo "Resetting database '$DB_NAME'..."
 dropdb --if-exists "$DB_NAME"
 createdb "$DB_NAME"
 
 echo "Running migrations..."
-psql "$DB_URL" -f server/migrations/001_create_users.sql
-psql "$DB_URL" -f server/migrations/002_create_permissions.sql
-psql "$DB_URL" -f server/migrations/003_create_ssh_keys.sql
-psql "$DB_URL" -f server/migrations/004_create_file_metadata.sql
+psql "$DB_URL" -f "$MIGRATIONS_DIR/001_create_users.sql"
+psql "$DB_URL" -f "$MIGRATIONS_DIR/002_create_permissions.sql"
+psql "$DB_URL" -f "$MIGRATIONS_DIR/003_create_ssh_keys.sql"
+psql "$DB_URL" -f "$MIGRATIONS_DIR/004_create_file_metadata.sql"
 
 echo "Enabling pgcrypto extension for password hashing..."
 psql "$DB_URL" -c "CREATE EXTENSION IF NOT EXISTS pgcrypto;"

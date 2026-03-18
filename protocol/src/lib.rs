@@ -1,21 +1,21 @@
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
+use sqlx::FromRow;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, FromRow)]
 pub struct User {
     pub id: Uuid,
     pub name: String,
     pub email: String,
     pub password_hash: String,
-    pub role: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, FromRow)]
 pub struct Permission {
     pub user_id: Uuid,
-    pub project: String,
+    pub project_id: Uuid,
     pub access: String, // "read", "write", "admin"
 }
 
@@ -52,12 +52,23 @@ pub struct Artifact {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Commit {
+pub struct CommitArtifact {
+    pub path: String,
+    pub artifact_id: String,
+    pub revision_base: u32,
     pub hash: String,
+    pub op: String, // "upsert" or "delete"
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Commit {
+    pub id: String,
     pub parent: Option<String>,
     pub message: String,
     pub author: String,
-    pub artifacts: HashMap<String, u32>,
+    pub artifacts: Vec<CommitArtifact>,
+    #[serde(default)]
+    pub timestamp: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -65,6 +76,48 @@ pub struct GitModule {
     pub path: String,
     pub url: String,
     pub commit: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct StagedInfo {
+    pub mtime: u64,
+    pub size: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct IndexArtifact {
+    pub artifact_id: String,
+    pub revision: u32,
+    pub local_state: String, // "placeholder" or "ready"
+    pub stage: String,       // "none" or "staged"
+    pub locked: bool,
+    pub lock_owner: Option<String>,
+    pub lock_generation: Option<String>,
+    pub staged: Option<StagedInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moved_from: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Index {
+    pub version: u32,
+    pub branch: String,
+    pub head: Option<String>,
+    pub artifacts: HashMap<String, IndexArtifact>,
+    #[serde(default)]
+    pub git_modules: HashMap<String, GitModule>,
+}
+
+impl Default for Index {
+    fn default() -> Self {
+        Index {
+            version: 1,
+            branch: "main".to_string(),
+            head: None,
+            artifacts: HashMap::new(),
+            git_modules: HashMap::new(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

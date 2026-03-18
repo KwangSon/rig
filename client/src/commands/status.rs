@@ -25,7 +25,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut untracked_files = Vec::new();
     let mut modified_files = Vec::new(); // Writable files
     let mut staged_files = Vec::new(); // Added but not in any commit yet
-    let mut committed_files = Vec::new(); // In index, in latest commit, but latest is 0 (not pushed)
+    let mut committed_files: Vec<String> = Vec::new(); // In index, in latest commit, but latest is 0 (not pushed)
 
     // Helper to scan recursively
     fn collect_files(dir: &PathBuf, base: &PathBuf) -> Vec<PathBuf> {
@@ -50,30 +50,14 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let all_workspace_files = collect_files(&current_dir, &current_dir);
 
     // 3. Compare with local index
-    let mut path_to_artifact = std::collections::HashMap::new();
-    let mut artifact_id_for_path = std::collections::HashMap::new();
-    for (id, artifact) in &local_index.artifacts {
-        path_to_artifact.insert(artifact.path.as_str(), artifact);
-        artifact_id_for_path.insert(artifact.path.as_str(), id.clone());
-    }
-
     for rel_path in &all_workspace_files {
         let path_str = rel_path.to_string_lossy().to_string();
 
-        if let Some(artifact) = path_to_artifact.get(path_str.as_str()) {
-            if artifact.latest == 0 {
-                // If it's in the latest commit, it's "committed but not pushed"
-                let artifact_id = artifact_id_for_path.get(path_str.as_str()).unwrap();
-                let in_commit = latest_commit
-                    .as_ref()
-                    .is_some_and(|c| c.artifacts.contains_key(artifact_id));
-                if in_commit {
-                    committed_files.push(path_str);
-                } else {
-                    staged_files.push(path_str);
-                }
+        if let Some(artifact) = local_index.artifacts.get(&path_str) {
+            if artifact.stage == "staged" {
+                staged_files.push(path_str);
             } else {
-                // Tracked on server - check if modified (writable)
+                // Check if modified (writable)
                 let full_path = current_dir.join(rel_path);
                 if fs::metadata(full_path).is_ok_and(|m| !m.permissions().readonly()) {
                     modified_files.push(path_str);
@@ -84,16 +68,28 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // Check for unpushed commits (spec field local_index.head)
+    let has_unpushed = local_index.head.is_some();
+
     // Check for missing files
     let mut missing_files = Vec::new();
-    for (id, artifact) in &local_index.artifacts {
-        let full_path = current_dir.join(&artifact.path);
+    for (path, _) in &local_index.artifacts {
+        let full_path = current_dir.join(path);
         if !full_path.exists() {
-            missing_files.push(id.clone());
+            missing_files.push(path.clone());
         }
     }
 
     // Output results
+    if has_unpushed {
+        println!(
+            "\n\x1b[33m⚠ Unpushed commits detected — local data is NOT backed up until pushed.\x1b[0m"
+        );
+        println!(
+            "\x1b[33m  Deleting working directory files before pushing will permanently lose data.\x1b[0m"
+        );
+        println!("\x1b[33m  → Run 'rig push' to back up your changes to the server.\x1b[0m");
+    }
     if !staged_files.is_empty() {
         println!("\nChanges to be committed (staged):");
         for file in &staged_files {

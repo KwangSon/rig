@@ -68,8 +68,19 @@ export default function UserSettingsPage() {
 
   const handleAddKey = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!token || !keyTitle || !keyData) return;
+    if (!token || !keyData) return;
     setKeySubmitting(true);
+
+    let finalTitle = keyTitle.trim();
+    if (!finalTitle) {
+      // Try to extract a title from the end of the SSH key (e.g., email or comment)
+      const parts = keyData.trim().split(/\s+/);
+      if (parts.length >= 3) {
+        finalTitle = parts.slice(2).join(" ");
+      } else {
+        finalTitle = "Unnamed Key";
+      }
+    }
 
     try {
       const res = await fetch(`${API_BASE}/users/me/ssh-keys`, {
@@ -79,7 +90,7 @@ export default function UserSettingsPage() {
           Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
-          title: keyTitle,
+          title: finalTitle,
           key_data: keyData,
         }),
       });
@@ -183,7 +194,6 @@ export default function UserSettingsPage() {
                     </label>
                     <input
                       type="text"
-                      required
                       value={keyTitle}
                       onChange={(e) => setKeyTitle(e.target.value)}
                       placeholder="e.g. My Laptop"

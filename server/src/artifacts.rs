@@ -6,7 +6,9 @@ use axum::{
 use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Serialize};
 use sha1::Digest;
+use sqlx::Row;
 use std::fs;
+use uuid::Uuid;
 
 use crate::{AppState, LockRequest, LockResponse, SharedState, UnlockRequest};
 use protocol::{Artifact, Revision};
@@ -293,12 +295,12 @@ pub async fn lock_handler(
             }
 
             // Sync with postgres file_locks table
-            let _ = sqlx::query!(
+            let _ = sqlx::query(
                 "INSERT INTO file_locks (project, file_path, locked_by, locked_at) VALUES ($1, $2, $3, NOW()) ON CONFLICT (project, file_path) DO UPDATE SET locked_by = $3, locked_at = NOW()",
-                project,
-                id,
-                payload.user
             )
+            .bind(&project)
+            .bind(&id)
+            .bind(&payload.user)
             .execute(&db)
             .await;
             (
@@ -378,13 +380,24 @@ pub async fn unlock_handler(
                         .users
                         .iter()
                         .find(|u| u.id == uid)
-                        .map(|u| u.role == "admin")
+                        .map(|u| u.email == "admin@example.com")
                         .unwrap_or(false);
 
-                    let has_project_admin = users_data
-                        .permissions
-                        .iter()
-                        .any(|p| p.user_id == uid && p.project == project && p.access == "admin");
+                    // We need the project's UUID to check permissions in the new schema
+                    let project_id_query = sqlx::query("SELECT id FROM projects WHERE name = $1")
+                        .bind(&project)
+                        .fetch_optional(&db)
+                        .await;
+
+                    let has_project_admin = if let Ok(Some(row)) = project_id_query {
+                        let pid: Uuid = row.get("id");
+                        users_data
+                            .permissions
+                            .iter()
+                            .any(|p| p.user_id == uid && p.project_id == pid && p.access == "admin")
+                    } else {
+                        false
+                    };
 
                     if is_global_admin || has_project_admin {
                         allow_unlock = true;
@@ -400,13 +413,11 @@ pub async fn unlock_handler(
                 }
 
                 // Sync with postgres file_locks table
-                let _ = sqlx::query!(
-                    "DELETE FROM file_locks WHERE project = $1 AND file_path = $2",
-                    project,
-                    id
-                )
-                .execute(&db)
-                .await;
+                let _ = sqlx::query("DELETE FROM file_locks WHERE project = $1 AND file_path = $2")
+                    .bind(&project)
+                    .bind(&id)
+                    .execute(&db)
+                    .await;
                 (
                     StatusCode::OK,
                     Json(LockResponse {
@@ -689,13 +700,11 @@ pub async fn push_handler(
             artifact.locked_by = None; // Auto-unlock on push
 
             // Auto-unlock in postgres
-            let _ = sqlx::query!(
-                "DELETE FROM file_locks WHERE project = $1 AND file_path = $2",
-                project,
-                id
-            )
-            .execute(&db)
-            .await;
+            let _ = sqlx::query("DELETE FROM file_locks WHERE project = $1 AND file_path = $2")
+                .bind(&project)
+                .bind(&id)
+                .execute(&db)
+                .await;
         } else {
             // New artifact
             println!(
@@ -714,7 +723,7 @@ pub async fn push_handler(
             let artifact_path = payload
                 .artifact_paths
                 .get(&id)
-                .map(|s| s.clone())
+                .cloned()
                 .unwrap_or_else(|| id.clone());
 
             app_state.artifacts.insert(
@@ -735,9 +744,9 @@ pub async fn push_handler(
     let mut new_commit = payload.commit;
 
     // Replace latest=0 (or any local assumptions) with the real server 'latest' revision
-    for (artifact_id, rev) in new_commit.artifacts.iter_mut() {
-        if let Some(artifact) = app_state.artifacts.get(artifact_id) {
-            *rev = artifact.latest;
+    for commit_artifact in new_commit.artifacts.iter_mut() {
+        if let Some(artifact) = app_state.artifacts.get(&commit_artifact.artifact_id) {
+            commit_artifact.revision_base = artifact.latest;
         }
     }
 
@@ -759,9 +768,9 @@ pub async fn push_handler(
             .unwrap()
             .as_bytes(),
     );
-    new_commit.hash = format!("{:x}", sha1::Digest::finalize(hasher));
+    new_commit.id = format!("{:x}", sha1::Digest::finalize(hasher));
 
-    let new_hash = new_commit.hash.clone();
+    let new_hash = new_commit.id.clone();
     commits_map.insert(new_hash.clone(), new_commit.clone());
 
     // Update branch ref if this push specifies a specific branch (we check payload.branch)

@@ -9,8 +9,8 @@ fn resolve_artifact_id(index: &Index, query: &str) -> Option<String> {
     index
         .artifacts
         .iter()
-        .find(|(_, details)| details.path == query)
-        .map(|(id, _)| id.clone())
+        .find(|(path, _)| path == &query)
+        .map(|(path, _)| path.clone())
 }
 
 pub async fn run(src: PathBuf, dst: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
@@ -22,12 +22,12 @@ pub async fn run(src: PathBuf, dst: PathBuf) -> Result<(), Box<dyn std::error::E
     let repo = Repository::open(&current_dir)?;
     let mut local_index = repo.read_index()?;
 
-    if let Some(id) = resolve_artifact_id(&local_index, &src_str) {
-        let artifact = local_index.artifacts.get_mut(&id).unwrap();
-
-        // Update path and moved_from
-        artifact.path = dst_str.clone();
+    if let Some(mut artifact) = local_index.artifacts.remove(&src_str) {
+        // Update moved_from
         artifact.moved_from = Some(src_str.clone());
+
+        // Re-insert with new path
+        local_index.artifacts.insert(dst_str.clone(), artifact);
 
         // Physical rename
         let src_full = current_dir.join(&src);
@@ -52,7 +52,7 @@ pub async fn run(src: PathBuf, dst: PathBuf) -> Result<(), Box<dyn std::error::E
         }
 
         repo.write_index(&local_index)?;
-        println!("   Metadata updated in local index (ID: {})", id);
+        println!("   Metadata updated in local index.");
     } else {
         return Err(format!("Artifact '{}' not found", src_str).into());
     }

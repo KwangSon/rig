@@ -1,11 +1,12 @@
-use crate::{CombinedState, SharedState};
+use crate::CombinedState;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::Json,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use sqlx::Row;
+use std::collections::HashMap;
 
 #[derive(Deserialize)]
 pub struct FileListQuery {
@@ -93,20 +94,25 @@ pub async fn list_files_handler(
     if !file_paths.is_empty() {
         // Warning: For extreme amounts of files in a single dir this might be a large query
         // but it scales fine for reasonable directory sizes
-        let locks = sqlx::query!(
+        let locks = sqlx::query(
             "SELECT file_path, locked_by FROM file_locks WHERE project = $1 AND file_path = ANY($2)",
-            project,
-            &file_paths[..]
         )
+        .bind(&project)
+        .bind(&file_paths)
         .fetch_all(&combined.db)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|e| {
+            eprintln!("Error fetching locks: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
         for lock in locks {
+            let lock_file_path: String = lock.get("file_path");
+            let locked_by: Option<String> = lock.get("locked_by");
             if let Some(entry) =
-                entries_map.get_mut(lock.file_path.strip_prefix(&prefix_with_slash).unwrap())
+                entries_map.get_mut(lock_file_path.strip_prefix(&prefix_with_slash).unwrap())
             {
-                entry.locked_by = lock.locked_by;
+                entry.locked_by = locked_by;
             }
         }
     }

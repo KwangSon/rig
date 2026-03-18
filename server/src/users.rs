@@ -5,7 +5,7 @@ use axum::{
 };
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -36,19 +36,14 @@ pub struct Claims {
 }
 
 pub async fn load_user_state(db: &PgPool) -> Result<UserState, sqlx::Error> {
-    let users = sqlx::query_as!(
-        User,
-        "SELECT id, name, email, password_hash, role FROM users"
-    )
-    .fetch_all(db)
-    .await?;
+    let users = sqlx::query_as::<_, User>("SELECT id, name, email, password_hash FROM users")
+        .fetch_all(db)
+        .await?;
 
-    let permissions = sqlx::query_as!(
-        Permission,
-        "SELECT user_id, project, access FROM permissions"
-    )
-    .fetch_all(db)
-    .await?;
+    let permissions =
+        sqlx::query_as::<_, Permission>("SELECT user_id, project_id, access FROM permissions")
+            .fetch_all(db)
+            .await?;
 
     Ok(UserState { users, permissions })
 }
@@ -56,13 +51,10 @@ pub async fn load_user_state(db: &PgPool) -> Result<UserState, sqlx::Error> {
 // Handlers
 
 pub async fn get_users_handler(State(db): State<PgPool>) -> Result<Json<Vec<User>>, StatusCode> {
-    let users = sqlx::query_as!(
-        User,
-        "SELECT id, name, email, password_hash, role FROM users"
-    )
-    .fetch_all(&db)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let users = sqlx::query_as::<_, User>("SELECT id, name, email, password_hash FROM users")
+        .fetch_all(&db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(users))
 }
 
@@ -71,7 +63,6 @@ pub struct CreateUserRequest {
     pub name: String,
     pub email: String,
     pub password: String,
-    pub role: String,
 }
 
 pub async fn create_user_handler(
@@ -82,14 +73,12 @@ pub async fn create_user_handler(
     let password_hash = bcrypt::hash(payload.password, bcrypt::DEFAULT_COST)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let user = sqlx::query_as!(
-        User,
-        "INSERT INTO users (name, email, password_hash, role) VALUES ($1, $2, $3, $4) RETURNING id, name, email, password_hash, role",
-        payload.name,
-        payload.email,
-        password_hash,
-        payload.role
+    let user = sqlx::query_as::<_, User>(
+        "INSERT INTO users (name, email, password_hash) VALUES ($1, $2, $3) RETURNING id, name, email, password_hash",
     )
+    .bind(&payload.name)
+    .bind(&payload.email)
+    .bind(&password_hash)
     .fetch_one(&db)
     .await
     .map_err(|e| {
@@ -107,7 +96,8 @@ pub async fn delete_user_handler(
     Path(id): Path<Uuid>,
     State(db): State<PgPool>,
 ) -> Result<StatusCode, StatusCode> {
-    sqlx::query!("DELETE FROM users WHERE id = $1", id)
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(id)
         .execute(&db)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -117,20 +107,18 @@ pub async fn delete_user_handler(
 pub async fn get_permissions_handler(
     State(db): State<PgPool>,
 ) -> Result<Json<Vec<Permission>>, StatusCode> {
-    let permissions = sqlx::query_as!(
-        Permission,
-        "SELECT user_id, project, access FROM permissions"
-    )
-    .fetch_all(&db)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let permissions =
+        sqlx::query_as::<_, Permission>("SELECT user_id, project_id, access FROM permissions")
+            .fetch_all(&db)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(permissions))
 }
 
 #[derive(Deserialize)]
 pub struct SetPermissionRequest {
     pub user_id: Uuid,
-    pub project: String,
+    pub project_name: String,
     pub access: String,
 }
 
@@ -138,31 +126,31 @@ pub async fn set_permission_handler(
     State(db): State<PgPool>,
     Json(payload): Json<SetPermissionRequest>,
 ) -> Result<(StatusCode, Json<Permission>), StatusCode> {
-    // Check if project exists
-    let project_exists = sqlx::query("SELECT id FROM projects WHERE name = $1")
-        .bind(&payload.project)
+    // Check if project exists and get its ID
+    let project_row = sqlx::query("SELECT id FROM projects WHERE name = $1")
+        .bind(&payload.project_name)
         .fetch_optional(&db)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .is_some();
+        .ok_or(StatusCode::NOT_FOUND)?;
 
-    if !project_exists {
-        return Err(StatusCode::NOT_FOUND);
-    }
+    let project_id: Uuid = project_row.get("id");
 
     // Upsert permission
-    let permission = sqlx::query_as!(
-        Permission,
-        "INSERT INTO permissions (user_id, project, access) VALUES ($1, $2, $3)
-         ON CONFLICT (user_id, project) DO UPDATE SET access = EXCLUDED.access
-         RETURNING user_id, project, access",
-        payload.user_id,
-        payload.project,
-        payload.access
+    let permission = sqlx::query_as::<_, Permission>(
+        "INSERT INTO permissions (user_id, project_id, access) VALUES ($1, $2, $3)
+         ON CONFLICT (user_id, project_id) DO UPDATE SET access = EXCLUDED.access
+         RETURNING user_id, project_id, access",
     )
+    .bind(payload.user_id)
+    .bind(project_id)
+    .bind(payload.access)
     .fetch_one(&db)
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(|e| {
+        eprintln!("Error setting permission: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     Ok((StatusCode::OK, Json(permission)))
 }
@@ -188,13 +176,12 @@ pub async fn register_handler(
     let password_hash = bcrypt::hash(payload.password, bcrypt::DEFAULT_COST)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let user = sqlx::query_as!(
-        User,
-        "INSERT INTO users (name, email, password_hash, role) VALUES ($1, $2, $3, 'user') RETURNING id, name, email, password_hash, role",
-        payload.name,
-        payload.email,
-        password_hash
+    let user = sqlx::query_as::<_, User>(
+        "INSERT INTO users (name, email, password_hash) VALUES ($1, $2, $3) RETURNING id, name, email, password_hash",
     )
+    .bind(&payload.name)
+    .bind(&payload.email)
+    .bind(&password_hash)
     .fetch_one(&db)
     .await
     .map_err(|e| {
@@ -233,11 +220,10 @@ pub async fn login_handler(
     State(db): State<PgPool>,
     Json(payload): Json<LoginRequest>,
 ) -> Result<Json<AuthResponse>, StatusCode> {
-    let user = sqlx::query_as!(
-        User,
-        "SELECT id, name, email, password_hash, role FROM users WHERE email = $1",
-        payload.email
+    let user = sqlx::query_as::<_, User>(
+        "SELECT id, name, email, password_hash FROM users WHERE email = $1",
     )
+    .bind(&payload.email)
     .fetch_optional(&db)
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
@@ -287,15 +273,13 @@ pub async fn me_handler(
 
     let user_id: Uuid = Uuid::parse_str(&token_data.claims.sub).unwrap();
 
-    let user = sqlx::query_as!(
-        User,
-        "SELECT id, name, email, password_hash, role FROM users WHERE id = $1",
-        user_id
-    )
-    .fetch_optional(&db)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    .ok_or(StatusCode::UNAUTHORIZED)?;
+    let user =
+        sqlx::query_as::<_, User>("SELECT id, name, email, password_hash FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_optional(&db)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .ok_or(StatusCode::UNAUTHORIZED)?;
 
     Ok(Json(user))
 }

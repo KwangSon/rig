@@ -19,14 +19,15 @@ pub async fn run(path: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>
     // Resolve artifact ID if path is provided
     let artifact_id = if let Some(p) = &path {
         let path_str = p.to_string_lossy().to_string();
-        if local_index.artifacts.contains_key(&path_str) {
-            Some(path_str)
+        if let Some(a) = local_index.artifacts.get(&path_str) {
+            Some(a.artifact_id.clone())
         } else {
+            // Check if it's already an ID
             local_index
                 .artifacts
-                .iter()
-                .find(|(_, details)| details.path == path_str)
-                .map(|(id, _)| id.clone())
+                .values()
+                .find(|a| a.artifact_id == path_str)
+                .map(|a| a.artifact_id.clone())
         }
     } else {
         None
@@ -37,7 +38,7 @@ pub async fn run(path: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>
     }
 
     if let Some(ref id) = artifact_id {
-        println!("History for artifact: {}", id);
+        println!("History for artifact ID: {}", id);
         println!(
             "{:<40} {:<10} {:<30} {:<15}",
             "HASH", "REV", "MESSAGE", "AUTHOR"
@@ -49,15 +50,15 @@ pub async fn run(path: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>
     while let Some(hash) = current_hash {
         if let Ok(Some(commit)) = repo.read_commit(&hash) {
             if let Some(ref id) = artifact_id {
-                // Filter by artifact
-                if let Some(rev) = commit.artifacts.get(id) {
+                // Filter by artifact in the CommitArtifact vector
+                if let Some(commit_art) = commit.artifacts.iter().find(|a| &a.artifact_id == id) {
                     println!(
                         "{:<40} {:<10} {:<30} {:<15}",
-                        commit.hash, rev, commit.message, commit.author
+                        commit.id, commit_art.revision_base, commit.message, commit.author
                     );
                 }
             } else {
-                println!("{} {} - {}", commit.hash, commit.message, commit.author);
+                println!("{} {} - {}", commit.id, commit.message, commit.author);
             }
             current_hash = commit.parent.clone();
         } else {

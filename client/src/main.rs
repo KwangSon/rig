@@ -8,14 +8,16 @@ mod utils;
 use crate::repository::{Index, Repository};
 
 fn resolve_artifact_id(index: &Index, query: &str) -> Option<String> {
-    if index.artifacts.contains_key(query) {
-        return Some(query.to_string());
+    // If query is a path
+    if let Some(artifact) = index.artifacts.get(query) {
+        return Some(artifact.artifact_id.clone());
     }
+    // If query is an ID
     index
         .artifacts
-        .iter()
-        .find(|(_, details)| details.path == query)
-        .map(|(id, _)| id.clone())
+        .values()
+        .find(|a| a.artifact_id == query)
+        .map(|a| a.artifact_id.clone())
 }
 
 #[derive(Parser)]
@@ -278,18 +280,32 @@ async fn lock_artifact(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         return Err("Lock request denied by server".into());
     }
 
-    // Change local file permission to writable (use the effective artifact path)
-    let local_path = current_dir.join(&index.artifacts[&artifact_id].path);
+    // Find the current path for this artifact ID to update permissions and index
+    let (current_path, _) = index
+        .artifacts
+        .iter()
+        .find(|(_, a)| a.artifact_id == artifact_id)
+        .ok_or("Artifact not found in index after lock")?;
+    let current_path = current_path.clone();
+
+    // Change local file permission to writable
+    let local_path = current_dir.join(&current_path);
     if local_path.exists() {
         let mut perms = std::fs::metadata(&local_path)?.permissions();
         #[allow(clippy::permissions_set_readonly_false)]
         perms.set_readonly(false);
         std::fs::set_permissions(&local_path, perms)?;
-        println!(
-            "Artifact '{}' is now writable",
-            index.artifacts[&artifact_id].path
-        );
+        println!("Artifact '{}' is now writable", current_path);
     }
+
+    // Update local index lock state
+    let mut mut_index = index;
+    if let Some(a) = mut_index.artifacts.get_mut(&current_path) {
+        a.locked = true;
+        a.lock_owner = Some(username.to_string());
+        // lock_generation would come from server if we had it in protocol
+    }
+    repo.write_index(&mut_index)?;
 
     Ok(())
 }
@@ -335,17 +351,31 @@ async fn unlock_artifact(path: &Path, force: bool) -> Result<(), Box<dyn std::er
         return Err(format!("Unlock request failed: {}", resp.status()).into());
     }
 
-    // Change local file permission to read-only (use the effective artifact path)
-    let local_path = current_dir.join(&index.artifacts[&artifact_id].path);
+    // Find current path to update index and permissions
+    let (current_path, _) = index
+        .artifacts
+        .iter()
+        .find(|(_, a)| a.artifact_id == artifact_id)
+        .ok_or("Artifact not found in index after unlock")?;
+    let current_path = current_path.clone();
+
+    // Change local file permission to read-only
+    let local_path = current_dir.join(&current_path);
     if local_path.exists() {
         let mut perms = std::fs::metadata(&local_path)?.permissions();
         perms.set_readonly(true);
         std::fs::set_permissions(&local_path, perms)?;
-        println!(
-            "Artifact '{}' is now read-only",
-            index.artifacts[&artifact_id].path
-        );
+        println!("Artifact '{}' is now read-only", current_path);
     }
+
+    // Update local index lock state
+    let mut mut_index = index;
+    if let Some(a) = mut_index.artifacts.get_mut(&current_path) {
+        a.locked = false;
+        a.lock_owner = None;
+        a.lock_generation = None;
+    }
+    repo.write_index(&mut_index)?;
 
     Ok(())
 }

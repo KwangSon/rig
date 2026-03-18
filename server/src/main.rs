@@ -370,7 +370,7 @@ async fn create_project_handler(
     }
 
     // Insert into DB
-    let _project_id =
+    let project_id =
         match sqlx::query("INSERT INTO projects (name, owner_id) VALUES ($1, $2) RETURNING id")
             .bind(&payload.name)
             .bind(owner_id)
@@ -389,9 +389,9 @@ async fn create_project_handler(
         };
 
     // Insert admin permission for owner
-    if sqlx::query("INSERT INTO permissions (user_id, project, access) VALUES ($1, $2, 'admin')")
+    if sqlx::query("INSERT INTO permissions (user_id, project_id, access) VALUES ($1, $2, 'admin')")
         .bind(owner_id)
-        .bind(&payload.name)
+        .bind(project_id)
         .execute(&combined.db)
         .await
         .is_err()
@@ -512,12 +512,12 @@ async fn delete_project_handler(
         .as_ref()
         .map(|row| row.get::<Uuid, _>("owner_id") == user_id)
         .unwrap_or(false);
-    let is_admin = sqlx::query("SELECT role FROM users WHERE id = $1")
+    let is_admin = sqlx::query("SELECT email FROM users WHERE id = $1")
         .bind(user_id)
         .fetch_optional(&combined.db)
         .await
         .unwrap_or(None)
-        .map(|row| row.get::<String, _>("role") == "admin")
+        .map(|row| row.get::<String, _>("email") == "admin@example.com")
         .unwrap_or(false);
 
     if !is_owner && !is_admin {

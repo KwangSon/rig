@@ -3,6 +3,7 @@ use flate2::Compression;
 use flate2::write::GzEncoder;
 use reqwest::multipart;
 use serde::Serialize;
+use sha1::Digest;
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
@@ -35,7 +36,7 @@ pub async fn run(_message_opt: Option<String>) -> Result<(), Box<dyn std::error:
 
     println!(
         "Preparing to push commit: {} ('{}')",
-        commit.hash, commit.message
+        commit.id, commit.message
     );
 
     let server_url = config
@@ -57,43 +58,96 @@ pub async fn run(_message_opt: Option<String>) -> Result<(), Box<dyn std::error:
     // Compression threshold (1MB)
     const COMPRESSION_THRESHOLD: usize = 1024 * 1024;
 
-    for (artifact_id, artifact_details) in &local_index.artifacts {
-        let local_path = current_dir.join(&artifact_details.path);
+    for commit_artifact in &commit.artifacts {
+        let path = &commit_artifact.path;
+        let local_path = current_dir.join(path);
         if !local_path.exists() {
-            continue;
+            return Err(
+                format!("ERROR: Committed file not found: {}", local_path.display()).into(),
+            );
         }
+
+        // --- Stage 3 — rig push pre-flight ---
+        let artifact_details = local_index
+            .artifacts
+            .get(path)
+            .ok_or_else(|| format!("Artifact '{}' not found in index", path))?;
 
         let metadata = fs::metadata(&local_path)?;
-        if !metadata.permissions().readonly() {
-            println!("-> Processing artifact for upload: {}", artifact_id);
-            let mut file_data = fs::read(&local_path)?;
-            let mut is_compressed = false;
+        let current_size = metadata.len();
+        let current_mtime = metadata
+            .modified()?
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs();
 
-            // Compress if large enough
-            if file_data.len() > COMPRESSION_THRESHOLD {
-                print!(
-                    "   Compressing {} ({} bytes)... ",
-                    artifact_id,
-                    file_data.len()
-                );
-                let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-                encoder.write_all(&file_data)?;
-                let compressed_data = encoder.finish()?;
+        let staged = artifact_details
+            .staged
+            .as_ref()
+            .ok_or_else(|| format!("Artifact '{}' was not staged via 'rig add'", path))?;
 
-                if compressed_data.len() < file_data.len() {
-                    println!("done. ({} bytes)", compressed_data.len());
-                    file_data = compressed_data;
-                    is_compressed = true;
-                } else {
-                    println!("skipped (compression didn't reduce size).");
-                }
+        let mut needs_recompute = false;
+        if current_size != staged.size {
+            needs_recompute = true;
+        } else if current_mtime != staged.mtime {
+            needs_recompute = true;
+        } else {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_secs();
+            if (now - staged.mtime) < 1 {
+                needs_recompute = true;
             }
-
-            artifact_compression.insert(artifact_id.clone(), is_compressed);
-            artifact_paths_map.insert(artifact_id.clone(), artifact_details.path.clone());
-            artifact_data.push((artifact_id.clone(), file_data));
-            artifact_paths.push(local_path);
         }
+
+        let hash_to_check = if needs_recompute {
+            let data = fs::read(&local_path)?;
+            let mut hasher = sha1::Sha1::new();
+            hasher.update(&data);
+            format!("{:x}", hasher.finalize())
+        } else {
+            commit_artifact.hash.clone()
+        };
+
+        if hash_to_check != commit_artifact.hash {
+            return Err(format!(
+                "ERROR: File '{}' changed after commit. Re-run 'rig add' and 'rig commit'.",
+                path
+            )
+            .into());
+        }
+        // -------------------------------------
+
+        println!(
+            "-> Processing artifact for upload: {}",
+            commit_artifact.artifact_id
+        );
+        let mut file_data = fs::read(&local_path)?;
+        let mut is_compressed = false;
+
+        // Compress if large enough
+        if file_data.len() > COMPRESSION_THRESHOLD {
+            print!(
+                "   Compressing {} ({} bytes)... ",
+                commit_artifact.artifact_id,
+                file_data.len()
+            );
+            let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+            encoder.write_all(&file_data)?;
+            let compressed_data = encoder.finish()?;
+
+            if compressed_data.len() < file_data.len() {
+                println!("done. ({} bytes)", compressed_data.len());
+                file_data = compressed_data;
+                is_compressed = true;
+            } else {
+                println!("skipped (compression didn't reduce size).");
+            }
+        }
+
+        artifact_compression.insert(commit_artifact.artifact_id.clone(), is_compressed);
+        artifact_paths_map.insert(commit_artifact.artifact_id.clone(), path.clone());
+        artifact_data.push((commit_artifact.artifact_id.clone(), file_data));
+        artifact_paths.push(local_path);
     }
 
     if artifact_data.is_empty() {
@@ -142,7 +196,7 @@ pub async fn run(_message_opt: Option<String>) -> Result<(), Box<dyn std::error:
     let authoritative_commit: Commit = resp.json().await?;
     println!(
         "-> Server accepted authoritative commit: {}",
-        authoritative_commit.hash
+        authoritative_commit.id
     );
 
     // 4. Synchronize local state
@@ -151,8 +205,38 @@ pub async fn run(_message_opt: Option<String>) -> Result<(), Box<dyn std::error:
     if remote_resp.status().is_success() {
         let remote_index: IndexFile = remote_resp.json().await?;
 
-        local_index.artifacts = remote_index.artifacts;
+        // Transform remote artifacts to new local index structure
+        let mut new_artifacts = std::collections::HashMap::new();
+        for (id, remote_art) in remote_index.artifacts {
+            let path = remote_art.path.clone();
+
+            // Try to preserve some local state if it existed
+            let (local_state, locked, lock_owner) =
+                if let Some(la) = local_index.artifacts.get(&path) {
+                    (la.local_state.clone(), la.locked, la.lock_owner.clone())
+                } else {
+                    ("placeholder".to_string(), false, None)
+                };
+
+            new_artifacts.insert(
+                path,
+                protocol::IndexArtifact {
+                    artifact_id: id,
+                    revision: remote_art.latest,
+                    local_state,
+                    stage: "none".to_string(), // Reset stage
+                    locked,
+                    lock_owner,
+                    lock_generation: None,
+                    staged: None, // Reset staged info (spec Stage 3)
+                    moved_from: None,
+                },
+            );
+        }
+
+        local_index.artifacts = new_artifacts;
         local_index.git_modules = remote_index.git_modules;
+        local_index.head = None; // Reset unpushed head (spec)
 
         repo.write_index(&local_index)?;
 
@@ -161,12 +245,10 @@ pub async fn run(_message_opt: Option<String>) -> Result<(), Box<dyn std::error:
         }
 
         if !remote_index.latest_commit.is_empty() {
-            // Wait, we need to sync remote refs!
             for (ref_name, hash) in &remote_index.refs {
                 repo.write_ref(ref_name, hash)?;
             }
             if remote_index.refs.is_empty() {
-                // Fallback for legacy pushed projects
                 repo.write_ref("refs/heads/main", &remote_index.latest_commit)?;
             }
         }

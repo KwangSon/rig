@@ -83,111 +83,112 @@ pub async fn run(
         local_index
             .artifacts
             .iter()
-            .find(|(_, details)| details.path == query)
-            .map(|(id, _)| id.clone())
+            .find(|(path, _)| path == &query)
+            .map(|(path, _)| path.clone())
     }
 
     // Determine artifacts and their target revisions
-    let mut targets: Vec<(String, u32)> = Vec::new();
+    let mut targets: Vec<(String, String, u32)> = Vec::new(); // (path, id, rev)
 
     if path_str == "*" {
         // All artifacts
-        for (id, artifact) in &remote_index.artifacts {
+        for (path, artifact) in &remote_index.artifacts {
             let rev = if let Some(ref commit_hash) = requested_commit {
                 let commit = remote_index
                     .commits
                     .get(commit_hash)
                     .ok_or_else(|| format!("Commit {} not found", commit_hash))?;
-                *commit.artifacts.get(id).unwrap_or(&artifact.latest)
+                commit
+                    .artifacts
+                    .iter()
+                    .find(|a| a.artifact_id == artifact.id)
+                    .map(|a| a.revision_base)
+                    .unwrap_or(artifact.latest)
             } else {
                 requested_rev.unwrap_or(artifact.latest)
             };
-            targets.push((id.clone(), rev));
+            targets.push((path.clone(), artifact.id.clone(), rev));
         }
     } else {
-        let mut matches: Vec<String> = remote_index
+        // Find matches in remote index (keyed by ID in IndexFile, wait!)
+        // Wait, protocol::IndexFile.artifacts is HashMap<ID, Artifact>
+        let mut matches: Vec<(String, String)> = remote_index
             .artifacts
             .iter()
-            .filter(|(_, details)| details.path.starts_with(&path_str))
-            .map(|(id, _)| id.clone())
+            .filter(|(_, a)| a.path.starts_with(&path_str))
+            .map(|(id, a)| (a.path.clone(), id.clone()))
             .collect();
 
-        // Also check local index for matches in case the file hasn't been fetched fully
         if matches.is_empty() {
+            // Check local index (keyed by Path)
             matches = local_index
                 .artifacts
                 .iter()
-                .filter(|(_, details)| details.path.starts_with(&path_str))
-                .map(|(id, _)| id.clone())
+                .filter(|(path, _)| path.starts_with(&path_str))
+                .map(|(path, a)| (path.clone(), a.artifact_id.clone()))
                 .collect();
         }
 
         if !matches.is_empty() {
-            for id in matches {
-                let artifact = remote_index
+            for (path, id) in matches {
+                let latest_rev = remote_index
                     .artifacts
                     .get(&id)
-                    .or_else(|| local_index.artifacts.get(&id))
-                    .unwrap();
+                    .map(|a| a.latest)
+                    .or_else(|| local_index.artifacts.get(&path).map(|a| a.revision))
+                    .unwrap_or(0);
+
                 let rev = if let Some(ref commit_hash) = requested_commit {
                     let commit = remote_index
                         .commits
                         .get(commit_hash)
                         .ok_or_else(|| format!("Commit {} not found", commit_hash))?;
-                    *commit.artifacts.get(&id).unwrap_or(&artifact.latest)
+                    commit
+                        .artifacts
+                        .iter()
+                        .find(|a| a.artifact_id == id)
+                        .map(|a| a.revision_base)
+                        .unwrap_or(latest_rev)
                 } else {
-                    requested_rev.unwrap_or(artifact.latest)
+                    requested_rev.unwrap_or(latest_rev)
                 };
-                targets.push((id, rev));
+                targets.push((path, id, rev));
             }
-        } else if let Some(id) = resolve_artifact_id(&remote_index, &local_index, &path_str) {
-            let artifact = remote_index
-                .artifacts
-                .get(&id)
-                .or_else(|| local_index.artifacts.get(&id))
-                .unwrap();
-            let rev = if let Some(ref commit_hash) = requested_commit {
-                let commit = remote_index
-                    .commits
-                    .get(commit_hash)
-                    .ok_or_else(|| format!("Commit {} not found", commit_hash))?;
-                *commit.artifacts.get(&id).unwrap_or(&artifact.latest)
-            } else {
-                requested_rev.unwrap_or(artifact.latest)
-            };
-            targets.push((id, rev));
         } else {
-            println!("[debug] Pull failed. Path searched: '{}'", path_str);
-            println!("[debug] Remote Artifacts:");
-            for (id, artifact) in &remote_index.artifacts {
-                println!("  ID: {}, Path: '{}'", id, artifact.path);
-            }
-            println!("[debug] Local Artifacts:");
-            for (id, artifact) in &local_index.artifacts {
-                println!("  ID: {}, Path: '{}'", id, artifact.path);
-            }
             return Err(format!("Path '{}' not found", path_str).into());
         }
     }
 
     // Pull artifacts
-    for (artifact_id, rev) in targets {
+    let mut mut_local_index = local_index;
+
+    for (path, artifact_id, rev) in targets {
+        // --- Spec Check: Active local lock ---
+        if let Some(local_art) = mut_local_index.artifacts.get(&path) {
+            if local_art.locked {
+                return Err(format!(
+                    "ERROR: File '{}' is locked locally. Push or unlock before pulling.",
+                    path
+                )
+                .into());
+            }
+        }
+
         let artifact_details = remote_index
             .artifacts
             .get(&artifact_id)
-            .or_else(|| local_index.artifacts.get(&artifact_id))
-            .unwrap();
+            .ok_or_else(|| format!("Artifact details for {} not found on server", path))?;
 
         let revision_info = artifact_details
             .revisions
             .iter()
             .find(|r| r.rev == rev)
-            .ok_or_else(|| format!("Revision {} not found for {}", rev, artifact_details.path))?;
+            .ok_or_else(|| format!("Revision {} not found for {}", rev, path))?;
 
-        println!("-> Pulling {} (rev {})", artifact_details.path, rev);
+        println!("-> Pulling {} (rev {})", path, rev);
 
         // Download
-        let ext = Path::new(&artifact_details.path)
+        let ext = Path::new(&path)
             .extension()
             .and_then(|s| s.to_str())
             .map(|s| format!(".{}", s))
@@ -217,9 +218,9 @@ pub async fn run(
         let local_path = if let Some(ref out) = out_arg {
             current_dir.join(out)
         } else if requested_rev.is_some() || requested_commit.is_some() {
-            current_dir.join(format!("{}@{}", artifact_details.path, rev))
+            current_dir.join(format!("{}@{}", path, rev))
         } else {
-            current_dir.join(&artifact_details.path)
+            current_dir.join(&path)
         };
 
         if let Some(parent) = local_path.parent() {
@@ -239,14 +240,35 @@ pub async fn run(
         fs::set_permissions(&local_path, perms)?;
 
         println!("   Saved to {}", local_path.display());
+
+        // Update local state if it's a standard pull
+        if requested_rev.is_none() && requested_commit.is_none() && out_arg.is_none() {
+            if let Some(local_art) = mut_local_index.artifacts.get_mut(&path) {
+                local_art.local_state = "ready".to_string();
+                local_art.revision = rev;
+            } else {
+                mut_local_index.artifacts.insert(
+                    path.clone(),
+                    protocol::IndexArtifact {
+                        artifact_id: artifact_id.clone(),
+                        revision: rev,
+                        local_state: "ready".to_string(),
+                        stage: "none".to_string(),
+                        locked: false,
+                        lock_owner: None,
+                        lock_generation: None,
+                        staged: None,
+                        moved_from: None,
+                    },
+                );
+            }
+        }
     }
 
-    // Update index if no specific revision/commit/out used
+    // Update index and commits
     if requested_rev.is_none() && requested_commit.is_none() && out_arg.is_none() {
-        let mut final_index = local_index;
-        final_index.artifacts = remote_index.artifacts;
-        final_index.git_modules = remote_index.git_modules;
-        repo.write_index(&final_index)?;
+        mut_local_index.git_modules = remote_index.git_modules;
+        repo.write_index(&mut_local_index)?;
 
         for (_, commit) in remote_index.commits {
             repo.write_commit(&commit)?;

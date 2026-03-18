@@ -9,3 +9,4 @@ sha1 = "0.10"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 flate2 = "1.1.9"
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "uuid", "chrono", "macros"] }

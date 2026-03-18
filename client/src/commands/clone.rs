@@ -138,16 +138,37 @@ pub async fn run(
     }
 
     // 3.4 Write tracking index
+    let mut local_artifacts = std::collections::HashMap::new();
+    for artifact in index.artifacts.values() {
+        local_artifacts.insert(
+            artifact.path.clone(),
+            protocol::IndexArtifact {
+                artifact_id: artifact.id.clone(),
+                revision: artifact.latest,
+                local_state: "placeholder".to_string(),
+                stage: "none".to_string(),
+                locked: false,
+                lock_owner: None,
+                lock_generation: None,
+                staged: None,
+                moved_from: None,
+            },
+        );
+    }
+
     let local_index = Index {
-        artifacts: index.artifacts,
+        version: 1,
+        branch: "main".to_string(),
+        head: None, // Reset head to null (spec: null if no unpushed commits exist)
+        artifacts: local_artifacts,
         git_modules: index.git_modules,
     };
     repo.write_index(&local_index)?;
 
     // 4. Create empty read-only files for each artifact
-    for artifact in local_index.artifacts.values() {
-        let file_path = clone_path.join(&artifact.path);
-        println!("-> Creating placeholder for {}", artifact.path);
+    for (path, artifact) in &local_index.artifacts {
+        let file_path = clone_path.join(path);
+        println!("-> Creating placeholder for {}", path);
 
         // Ensure parent directories exist
         if let Some(parent) = file_path.parent() {

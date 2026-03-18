@@ -39,9 +39,37 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         repo.write_commit(&commit)?;
     }
 
-    // Update refs/remote/origin/main (conceptually, we just update index for now)
+    // Merge remote artifacts into local index
     let mut local_index = repo.read_index()?;
-    local_index.artifacts = remote_index.artifacts;
+
+    for (id, artifact) in remote_index.artifacts {
+        let path = artifact.path.clone();
+
+        if let Some(local_art) = local_index.artifacts.get_mut(&path) {
+            // Update existing artifact metadata
+            local_art.revision = artifact.latest;
+            local_art.locked = artifact.locked_by.is_some();
+            local_art.lock_owner = artifact.locked_by;
+            // Note: we'd ideally have lock_generation in protocol::Artifact too
+        } else {
+            // Add new artifact from remote
+            local_index.artifacts.insert(
+                path,
+                protocol::IndexArtifact {
+                    artifact_id: id,
+                    revision: artifact.latest,
+                    local_state: "placeholder".to_string(),
+                    stage: "none".to_string(),
+                    locked: artifact.locked_by.is_some(),
+                    lock_owner: artifact.locked_by,
+                    lock_generation: None,
+                    staged: None,
+                    moved_from: None,
+                },
+            );
+        }
+    }
+
     local_index.git_modules = remote_index.git_modules;
     repo.write_index(&local_index)?;
 
