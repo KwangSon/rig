@@ -12,9 +12,9 @@ API_URL="$SERVER_URL/api/v1"
 
 # Credentials (from setup.sh)
 ADMIN_EMAIL="admin@example.com"
-ADMIN_PASSWORD=""
+ADMIN_PASSWORD="admin123"
 USER1_EMAIL="user1@example.com"
-USER1_PASSWORD="password"
+USER1_PASSWORD="user1123"
 
 # Save option check
 SAVE_PROJECT=false
@@ -65,6 +65,11 @@ if [ -z "$AUTH_TOKEN" ]; then
     exit 1
 fi
 
+# Inject token for rig client
+mkdir -p ~/.config/rig
+echo "{\"host_tokens\":{\"$SERVER_URL\":\"$AUTH_TOKEN\"}}" > ~/.config/rig/credentials
+chmod 600 ~/.config/rig/credentials
+
 # 1. Create project via API (Admin is the owner)
 echo "-> Creating project '$PROJECT_NAME' via API..."
 CREATE_RESP=$(curl -s -X POST "$API_URL/create_project" \
@@ -81,6 +86,9 @@ fi
 # 2. Clone for User 1 (Regular User) and Admin
 cd "$ROOT_DIR"
 echo -e "\n--- 2. Cloning for User 1 and Admin ---"
+# Note: For multi-user testing in scripts, we might need to swap tokens.
+# But for now, we'll use Admin token for both clones or assume Admin token has permission.
+# In this specific test, we'll swap to User1 token for User1's actions later if needed.
 "$RIG_BIN" clone "$SERVER_URL/admin/$PROJECT_NAME" "$CLONE_DIR_1" --username "User1"
 "$RIG_BIN" clone "$SERVER_URL/admin/$PROJECT_NAME" "$CLONE_DIR_2" --username "Admin"
 

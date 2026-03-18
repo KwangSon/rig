@@ -1,42 +1,28 @@
 #!/bin/bash
+
+# Multi-User Collaboration Test for Rig (HTTP Token Auth)
+# This script simulates two users working on the same project.
+
 set -e
 
-# Setup paths
-ROOT_DIR="$(pwd)"
-RIG_BIN="$ROOT_DIR/target/debug/client"
-PROJECT_NAME="full_workflow_test_$(date +%s)"
-CLONE_DIR="full_workflow_cloned_project"
+# Configuration
 SERVER_URL="http://localhost:3000"
 API_URL="$SERVER_URL/api/v1"
+PROJECT_NAME="ExampleProject"
+ROOT_DIR="$(pwd)"
+RIG_BIN="$ROOT_DIR/target/debug/rig"
+ADMIN_WS="$ROOT_DIR/admin_ws"
+USER1_WS="$ROOT_DIR/user1_ws"
 
-# Credentials (from setup.sh)
-ADMIN_EMAIL="admin@example.com"
-ADMIN_PASSWORD=""
-
-# Save option check
-SAVE_PROJECT=false
-if [[ "$*" == *"--save"* ]]; then
-    SAVE_PROJECT=true
-    echo "-> Save mode enabled: Project and local files will be preserved."
-fi
+# Tokens (from setup.sh)
+ADMIN_TOKEN="rigp_admin1234567890"
+USER1_TOKEN="rigp_user11234567890"
 
 # Cleanup function
 function cleanup {
-    if [ "$SAVE_PROJECT" = true ]; then
-        echo -e "\n--- Skipping cleanup as requested (save mode) ---"
-        echo "Project: $PROJECT_NAME"
-        echo "Local directories: $PROJECT_NAME, $CLONE_DIR"
-        return
-    fi
-
-    echo -e "\n--- Cleaning up ---"
-    if [ ! -z "$AUTH_TOKEN" ]; then
-        echo "Deleting test project '$PROJECT_NAME' via API..."
-        curl -s -X DELETE "$API_URL/projects/$PROJECT_NAME" \
-             -H "Authorization: Bearer $AUTH_TOKEN" > /dev/null
-    fi
-    cd "$ROOT_DIR"
-    rm -rf "$PROJECT_NAME" "$CLONE_DIR"
+    echo -e "\n--- Cleaning up test workspaces ---"
+    rm -rf "$ADMIN_WS" "$USER1_WS"
+    rm -f ~/.config/rig/credentials
 }
 trap cleanup EXIT
 
@@ -46,78 +32,80 @@ if [ ! -f "$RIG_BIN" ]; then
     exit 1
 fi
 
-echo "=== Starting Automated Full Workflow Test ==="
+echo "=== Starting Multi-User Collaboration Test ==="
 
-# 0. Login to get Token
-echo "-> Logging in as admin..."
-LOGIN_RESP=$(curl -s -X POST "$API_URL/login" \
-    -H "Content-Type: application/json" \
-    -d "{\"email\":\"$ADMIN_EMAIL\", \"password\":\"$ADMIN_PASSWORD\"}")
+# Helper to setup credentials for a specific user
+function set_token {
+    local token=$1
+    mkdir -p ~/.config/rig
+    echo "{\"host_tokens\":{\"$SERVER_URL\":\"$token\"}}" > ~/.config/rig/credentials
+    chmod 600 ~/.config/rig/credentials
+}
 
-AUTH_TOKEN=$(echo $LOGIN_RESP | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
-
-if [ -z "$AUTH_TOKEN" ]; then
-    echo "Error: Failed to login and get auth token."
-    echo "Response: $LOGIN_RESP"
-    exit 1
-fi
-
-# 1. Create project via API
-echo "-> Creating project '$PROJECT_NAME' via API..."
+# --- 0. Create project via API ---
+echo "--- 0. Creating project '$PROJECT_NAME' ---"
 CREATE_RESP=$(curl -s -X POST "$API_URL/create_project" \
     -H "Content-Type: application/json" \
-    -H "Authorization: Bearer $AUTH_TOKEN" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
     -d "{\"name\":\"$PROJECT_NAME\"}")
+echo "Response: $CREATE_RESP"
 
-if [[ $CREATE_RESP == *"error"* ]]; then
-    echo "Error: Failed to create project."
-    echo "Response: $CREATE_RESP"
+# --- 1. User: Admin (Setting up project) ---
+echo -e "\n--- 1. User: Admin (Setting up project) ---"
+set_token "$ADMIN_TOKEN"
+rm -rf "$ADMIN_WS"
+"$RIG_BIN" clone "$SERVER_URL/admin/$PROJECT_NAME" "$ADMIN_WS" --username "Admin"
+
+cd "$ADMIN_WS"
+echo "Hello from Admin at $(date)" > shared_file.txt
+"$RIG_BIN" add shared_file.txt
+"$RIG_BIN" commit -m "Admin: Initial shared file"
+"$RIG_BIN" push
+cd "$ROOT_DIR"
+
+# --- 2. User: User1 (Modifying file) ---
+echo -e "\n--- 2. User: User1 (Modifying file) ---"
+set_token "$USER1_TOKEN"
+rm -rf "$USER1_WS"
+"$RIG_BIN" clone "$SERVER_URL/admin/$PROJECT_NAME" "$USER1_WS" --username "User1"
+
+cd "$USER1_WS"
+"$RIG_BIN" pull shared_file.txt
+"$RIG_BIN" lock shared_file.txt
+echo "User1 added this line" >> shared_file.txt
+"$RIG_BIN" add shared_file.txt
+"$RIG_BIN" commit -m "User1: Updated shared file"
+
+# --- 3. Admin conflict test (While User1 still holds the lock) ---
+echo -e "\n--- 3. User: Admin (Testing lock conflict) ---"
+set_token "$ADMIN_TOKEN"
+cd "$ADMIN_WS"
+"$RIG_BIN" fetch
+echo "-> Attempting to lock file held by User1 (should fail)..."
+# Use a subshell to avoid exiting on expected failure
+if "$RIG_BIN" lock shared_file.txt 2>&1 | grep -q "locked by User1"; then
+    echo "   Correct: Lock rejected because User1 holds it."
+else
+    echo "   Error: Lock should have been rejected!"
     exit 1
 fi
-
-# 2. Clone the new project
-echo -e "\n--- 1. Cloning project: $PROJECT_NAME ---"
-"$RIG_BIN" clone "$SERVER_URL/admin/$PROJECT_NAME" "$PROJECT_NAME" --username "Jone"
-cd "$PROJECT_NAME"
-
-# 3. Add and Push first revision
-echo -e "\n--- 2. Adding first artifact ---"
-echo "Revision 1 content" > file1.txt
-"$RIG_BIN" add file1.txt
-"$RIG_BIN" commit -m "Initial commit with file1.txt"
-"$RIG_BIN" push
-
-# 4. Clone project into a new directory
 cd "$ROOT_DIR"
-echo -e "\n--- 3. Cloning project into $CLONE_DIR ---"
-"$RIG_BIN" clone "$SERVER_URL/admin/$PROJECT_NAME" "$CLONE_DIR" --username "CloneUser"
 
-# 5. Pull and Modify from Clone
-cd "$CLONE_DIR"
-echo -e "\n--- 4. Pulling and modifying from clone ---"
-"$RIG_BIN" pull file1.txt
-echo "Original content in clone:"
-cat file1.txt
-
-"$RIG_BIN" lock file1.txt
-echo "Revision 2 content from clone" >> file1.txt
-"$RIG_BIN" add file1.txt
-"$RIG_BIN" commit -m "Revision 2 from cloned repository"
+# --- 4. User1 pushes and releases lock ---
+echo -e "\n--- 4. User: User1 (Pushing and releasing lock) ---"
+set_token "$USER1_TOKEN"
+cd "$USER1_WS"
 "$RIG_BIN" push
+"$RIG_BIN" unlock shared_file.txt
+cd "$ROOT_DIR"
 
-# 6. Verify History (Log)
-echo -e "\n--- 5. Verifying history in clone ---"
-"$RIG_BIN" log
-echo ""
-"$RIG_BIN" log file1.txt
+# --- 5. User: Admin (Finalizing) ---
+echo -e "\n--- 5. User: Admin (Finalizing) ---"
+set_token "$ADMIN_TOKEN"
+cd "$ADMIN_WS"
+"$RIG_BIN" lock shared_file.txt
+"$RIG_BIN" pull shared_file.txt
+echo "Final file content in Admin workspace:"
+cat shared_file.txt
 
-# 7. Synchronize Original Repository
-cd "$ROOT_DIR/$PROJECT_NAME"
-echo -e "\n--- 6. Synchronizing original repository ---"
-"$RIG_BIN" fetch
-"$RIG_BIN" pull file1.txt
-echo "Final content in original repo:"
-cat file1.txt
-
-echo -e "\n=== Full Workflow Test Completed Successfully! ==="
-echo "You can now check the project '$PROJECT_NAME' in the Web UI."
+echo -e "\n=== Test Passed Successfully! ==="

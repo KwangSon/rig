@@ -1,12 +1,15 @@
-"use client";
-
 import { useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 export default function LoginPage() {
+  const searchParams = useSearchParams();
+  const cliSession = searchParams.get("cli_session");
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -17,13 +20,22 @@ export default function LoginPage() {
       const res = await fetch("http://localhost:3000/api/v1/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({
+          email,
+          password,
+          cli_session: cliSession,
+        }),
       });
 
       if (res.ok) {
         const data = await res.json();
         localStorage.setItem("token", data.token);
-        window.location.href = "/";
+
+        if (cliSession) {
+          setSuccess(true);
+        } else {
+          window.location.href = "/";
+        }
       } else {
         setError("Invalid credentials");
       }
@@ -33,6 +45,36 @@ export default function LoginPage() {
       setLoading(false);
     }
   };
+
+  if (success) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-gray-50">
+        <div className="w-full max-w-md space-y-8 text-center">
+          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-green-100 p-3">
+            <svg
+              className="h-8 w-8 text-green-600"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="2"
+                d="M5 13l4 4L19 7"
+              />
+            </svg>
+          </div>
+          <h2 className="mt-6 text-3xl font-extrabold text-gray-900">
+            Login Successful
+          </h2>
+          <p className="mt-2 text-gray-600">
+            You can now close this window and return to your terminal.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-gray-50">

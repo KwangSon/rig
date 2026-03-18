@@ -21,11 +21,22 @@ pub struct FileEntry {
     pub locked_by: Option<String>,
 }
 
+use axum::http::HeaderMap;
+
 pub async fn list_files_handler(
     Path(project): Path<String>,
+    headers: HeaderMap,
     Query(query): Query<FileListQuery>,
     State(combined): State<CombinedState>,
 ) -> Result<Json<Vec<FileEntry>>, StatusCode> {
+    let auth_header = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    crate::users::authenticate_token(&combined.db, auth_header).await?;
+
     let mut entries_map: HashMap<String, FileEntry> = HashMap::new();
     let prefix = query.path.unwrap_or_else(|| "".to_string());
 

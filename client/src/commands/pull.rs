@@ -1,3 +1,4 @@
+use crate::auth::ensure_authenticated;
 use crate::repository::Repository;
 use flate2::read::GzDecoder;
 use protocol::IndexFile;
@@ -59,8 +60,18 @@ pub async fn run(
         .server_url
         .as_deref()
         .unwrap_or("http://localhost:3000");
+
+    let token = match ensure_authenticated(server_url).await {
+        Ok(t) => t,
+        Err(e) => return Err(format!("Authentication failed: {}", e).into()),
+    };
+
     let remote_index_url = format!("{}/api/v1/{}/index", server_url, config.project);
-    let remote_resp = client.get(&remote_index_url).send().await?;
+    let remote_resp = client
+        .get(&remote_index_url)
+        .header("authorization", format!("Bearer {}", token))
+        .send()
+        .await?;
     let remote_text = remote_resp.text().await?;
     let remote_index: IndexFile = serde_json::from_str(&remote_text)?;
 
@@ -167,7 +178,10 @@ pub async fn run(
 
         let is_compressed = revision_info.compressed;
 
-        println!("-> Pulling {} (rev {}) (compressed={})", path, rev, is_compressed);
+        println!(
+            "-> Pulling {} (rev {}) (compressed={})",
+            path, rev, is_compressed
+        );
 
         // Download
         let ext = Path::new(&path)
@@ -183,6 +197,7 @@ pub async fn run(
 
         let mut file_content = client
             .get(&download_url)
+            .header("authorization", format!("Bearer {}", token))
             .send()
             .await?
             .bytes()

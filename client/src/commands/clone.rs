@@ -1,3 +1,4 @@
+use crate::auth::ensure_authenticated;
 use crate::repository::{Config, Index, Repository};
 use protocol::IndexFile;
 use std::fs;
@@ -10,41 +11,27 @@ pub async fn run(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let trimmed_url = url.trim_end_matches('/');
 
-    // We expect URLs like:
-    // ssh://rig@localhost:2222/username/project_name
-    // http://localhost:3000/username/project_name
-    let (project_name, username, base_url) = if trimmed_url.starts_with("ssh://") {
-        let parts: Vec<&str> = trimmed_url.split('/').collect();
-        if parts.len() < 5 {
-            return Err("Invalid SSH URL format. Expected ssh://<user>@<host>:<port>/<username>/<project>".into());
+    let parts: Vec<&str> = trimmed_url.split('/').collect();
+    if parts.len() < 5 {
+        return Err(
+            "Invalid HTTP URL format. Expected http://<server>:<port>/<username>/<project>".into(),
+        );
+    }
+    let project_name = parts.last().unwrap().to_string();
+    let username = parts[parts.len() - 2].to_string();
+
+    let mut base_url = String::new();
+    // everything up to the username part is the base URL
+    for i in 0..(parts.len() - 2) {
+        base_url.push_str(parts[i]);
+        if i < parts.len() - 3 {
+            base_url.push('/');
         }
-        let project = parts.last().unwrap().to_string();
-        let username = parts[parts.len() - 2].to_string();
-        // Discard SSH specific host part, fall back to API server directly (per user instruction to use HTTP fallback)
-        let api_base = "http://localhost:3000".to_string();
-        (project, Some(username), api_base)
-    } else {
-        let parts: Vec<&str> = trimmed_url.split('/').collect();
-        if parts.len() < 5 {
-            return Err("Invalid HTTP URL format. Expected http://<server>:<port>/<username>/<project>".into());
-        }
-        let project = parts.last().unwrap().to_string();
-        let username = parts[parts.len() - 2].to_string();
-        
-        let mut base = String::new();
-        // everything up to the username part is the base URL
-        for i in 0..(parts.len() - 2) {
-            base.push_str(parts[i]);
-            if i < parts.len() - 3 {
-                base.push('/');
-            }
-        }
-        (project, Some(username), base)
-    };
+    }
 
     println!(
         "Cloning project '{}/{}' from server '{}'",
-        username.as_deref().unwrap_or("unknown"), project_name, base_url
+        username, project_name, base_url
     );
 
     let client = reqwest::Client::new();
@@ -67,11 +54,18 @@ pub async fn run(
     }
     println!("   Server is alive.");
 
-    // 2. Fetch metadata from the server
+    // 2. Authenticate
+    let token = match ensure_authenticated(&base_url).await {
+        Ok(t) => t,
+        Err(e) => return Err(format!("Authentication failed: {}", e).into()),
+    };
+
+    // 3. Fetch metadata from the server
     let metadata_url = format!("{}/api/v1/{}/index", base_url, project_name);
     println!("-> Fetching metadata from {}...", metadata_url);
     let meta_resp = client
         .get(&metadata_url)
+        .header("authorization", format!("Bearer {}", token))
         .send()
         .await
         .map_err(|e| format!("Failed to fetch metadata from {}: {}", metadata_url, e))?;
@@ -92,8 +86,8 @@ pub async fn run(
     // 2.5 Resolve username (interactive only if not provided)
     let resolved_username = if let Some(u) = provided_username {
         u.clone()
-    } else if let Some(u) = username {
-        u.clone()
+    } else if !username.is_empty() {
+        username.clone()
     } else {
         use std::io::{self, Write};
         let default_username =

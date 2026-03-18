@@ -74,6 +74,7 @@ pub struct CombinedState {
     pub projects: SharedState,
     pub users: users::SharedUserState,
     pub db: sqlx::PgPool,
+    pub base_dir: PathBuf,
 }
 
 impl FromRef<CombinedState> for SharedState {
@@ -143,6 +144,7 @@ async fn main() {
         projects: state,
         users: user_state,
         db,
+        base_dir: base_dir.clone(),
     };
 
     let cors = CorsLayer::new()
@@ -158,14 +160,6 @@ async fn main() {
             get(get_project_handler).delete(delete_project_handler),
         )
         .route("/projects/{name}/files", get(files::list_files_handler))
-        .route(
-            "/projects/{name}/ssh-keys",
-            get(keys::get_keys_handler).post(keys::add_key_handler),
-        )
-        .route(
-            "/projects/{name}/ssh-keys/{id}",
-            delete(keys::delete_key_handler),
-        )
         .route("/create_project", post(create_project_handler))
         .route(
             "/users",
@@ -178,15 +172,9 @@ async fn main() {
         )
         .route("/register", post(users::register_handler))
         .route("/login", post(users::login_handler))
+        .route("/auth/session", post(auth::create_session_handler))
+        .route("/auth/token", get(auth::poll_session_handler))
         .route("/users/me", get(users::me_handler))
-        .route(
-            "/users/me/ssh-keys",
-            get(keys::get_user_keys_handler).post(keys::add_user_key_handler),
-        )
-        .route(
-            "/users/me/ssh-keys/{id}",
-            delete(keys::delete_user_key_handler),
-        )
         .route("/{project}/index", get(artifacts::get_index_handler))
         .route(
             "/{project}/artifacts",
@@ -341,19 +329,17 @@ async fn create_project_handler(
         })
         .unwrap();
 
-    let token_data = match crate::users::decode_token(auth_header) {
-        Ok(data) => data,
-        Err(_) => {
+    let user = match crate::users::authenticate_token(&combined.db, auth_header).await {
+        Ok(u) => u,
+        Err(status) => {
             return (
-                StatusCode::UNAUTHORIZED,
+                status,
                 Json(CreateProjectResponse {
                     message: "Invalid token".to_string(),
                 }),
             );
         }
     };
-
-    let owner_id: Uuid = Uuid::parse_str(&token_data.sub).unwrap();
 
     // Check if project exists in DB
     let existing = sqlx::query("SELECT id FROM projects WHERE name = $1")
@@ -373,7 +359,7 @@ async fn create_project_handler(
     let project_id =
         match sqlx::query("INSERT INTO projects (name, owner_id) VALUES ($1, $2) RETURNING id")
             .bind(&payload.name)
-            .bind(owner_id)
+            .bind(user.id)
             .fetch_one(&combined.db)
             .await
         {
@@ -390,7 +376,7 @@ async fn create_project_handler(
 
     // Insert admin permission for owner
     if sqlx::query("INSERT INTO permissions (user_id, project_id, access) VALUES ($1, $2, 'admin')")
-        .bind(owner_id)
+        .bind(user.id)
         .bind(project_id)
         .execute(&combined.db)
         .await
@@ -405,7 +391,7 @@ async fn create_project_handler(
     }
 
     // Create project directory
-    let project_dir = PathBuf::from("server/examples").join(&payload.name);
+    let project_dir = combined.base_dir.join(&payload.name);
     if fs::create_dir_all(&project_dir).is_err() {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -494,12 +480,10 @@ async fn delete_project_handler(
         .ok_or(StatusCode::UNAUTHORIZED)
         .unwrap();
 
-    let token_data = match crate::users::decode_token(auth_header) {
-        Ok(data) => data,
-        Err(_) => return StatusCode::UNAUTHORIZED,
+    let user = match crate::users::authenticate_token(&combined.db, auth_header).await {
+        Ok(u) => u,
+        Err(status) => return status,
     };
-
-    let user_id: Uuid = Uuid::parse_str(&token_data.sub).unwrap();
 
     // Check if user is owner or global admin
     let project_owner = sqlx::query("SELECT owner_id FROM projects WHERE name = $1")
@@ -510,10 +494,10 @@ async fn delete_project_handler(
 
     let is_owner = project_owner
         .as_ref()
-        .map(|row| row.get::<Uuid, _>("owner_id") == user_id)
+        .map(|row| row.get::<Uuid, _>("owner_id") == user.id)
         .unwrap_or(false);
     let is_admin = sqlx::query("SELECT email FROM users WHERE id = $1")
-        .bind(user_id)
+        .bind(user.id)
         .fetch_optional(&combined.db)
         .await
         .unwrap_or(None)
@@ -550,6 +534,6 @@ async fn delete_project_handler(
 // --- Artifacts Module ---
 
 mod artifacts;
+mod auth;
 mod files;
-mod keys;
 mod users;

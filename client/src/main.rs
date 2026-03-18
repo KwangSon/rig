@@ -1,10 +1,13 @@
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
+mod auth;
 mod commands;
+mod credentials;
 pub mod repository;
 mod utils;
 
+use crate::auth::ensure_authenticated;
 use crate::repository::{Index, Repository};
 
 fn resolve_artifact_id(index: &Index, query: &str) -> Option<String> {
@@ -259,19 +262,28 @@ async fn lock_artifact(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         .ok_or_else(|| format!("Artifact '{}' not found", path_str))?;
 
     let username = config.username.as_deref().unwrap_or("unknown");
-
-    // Send POST to server (lock endpoint is namespaced by project)
-    let client = reqwest::Client::new();
     let server_url = config
         .server_url
         .as_deref()
         .unwrap_or("http://localhost:3000");
+    let client = reqwest::Client::new();
+
+    let token = match ensure_authenticated(server_url).await {
+        Ok(t) => t,
+        Err(e) => return Err(format!("Authentication failed: {}", e).into()),
+    };
+
     let url = format!(
         "{}/api/v1/{}/artifacts/{}/lock",
         server_url, config.project, artifact_id
     );
-    let body = serde_json::json!({"user": username});
-    let resp = client.post(&url).json(&body).send().await?;
+    let body = serde_json::json!({"user": username}); // Note: server now uses token to get real username, but we keep this for protocol compatibility if needed
+    let resp = client
+        .post(&url)
+        .header("authorization", format!("Bearer {}", token))
+        .json(&body)
+        .send()
+        .await?;
     if !resp.status().is_success() {
         return Err(format!("Lock request failed: {}", resp.status()).into());
     }
@@ -326,13 +338,17 @@ async fn unlock_artifact(path: &Path, force: bool) -> Result<(), Box<dyn std::er
         .ok_or_else(|| format!("Artifact '{}' not found", path_str))?;
 
     let username = config.username.as_deref().unwrap_or("unknown");
-
-    // Send DELETE to server (unlock endpoint is namespaced by project)
-    let client = reqwest::Client::new();
     let server_url = config
         .server_url
         .as_deref()
         .unwrap_or("http://localhost:3000");
+    let client = reqwest::Client::new();
+
+    let token = match ensure_authenticated(server_url).await {
+        Ok(t) => t,
+        Err(e) => return Err(format!("Authentication failed: {}", e).into()),
+    };
+
     let url = format!(
         "{}/api/v1/{}/artifacts/{}/lock",
         server_url, config.project, artifact_id
@@ -341,7 +357,12 @@ async fn unlock_artifact(path: &Path, force: bool) -> Result<(), Box<dyn std::er
         "user": username,
         "force": force
     });
-    let resp = client.delete(&url).json(&body).send().await?;
+    let resp = client
+        .delete(&url)
+        .header("authorization", format!("Bearer {}", token))
+        .json(&body)
+        .send()
+        .await?;
     if !resp.status().is_success() {
         if resp.status() == reqwest::StatusCode::FORBIDDEN {
             let resp_json: serde_json::Value = resp.json().await?;

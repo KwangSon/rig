@@ -1,3 +1,4 @@
+use crate::auth::ensure_authenticated;
 use crate::repository::Repository;
 use flate2::Compression;
 use flate2::write::GzEncoder;
@@ -46,6 +47,11 @@ pub async fn run(_message_opt: Option<String>) -> Result<(), Box<dyn std::error:
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(300))
         .build()?;
+
+    let token = match ensure_authenticated(server_url).await {
+        Ok(t) => t,
+        Err(e) => return Err(format!("Authentication failed: {}", e).into()),
+    };
 
     // 1. Prepare Metadata and artifacts info
     let mut artifact_compression = HashMap::new();
@@ -176,7 +182,12 @@ pub async fn run(_message_opt: Option<String>) -> Result<(), Box<dyn std::error:
     let push_url = format!("{}/api/v1/{}/push", server_url, config.project);
     println!("-> Sending push request (multipart) to server...");
 
-    let resp = client.post(&push_url).multipart(form).send().await?;
+    let resp = client
+        .post(&push_url)
+        .header("authorization", format!("Bearer {}", token))
+        .multipart(form)
+        .send()
+        .await?;
     let status = resp.status();
 
     if !status.is_success() {
@@ -192,7 +203,11 @@ pub async fn run(_message_opt: Option<String>) -> Result<(), Box<dyn std::error:
 
     // 4. Synchronize local state
     let remote_index_url = format!("{}/api/v1/{}/index", server_url, config.project);
-    let remote_resp = client.get(&remote_index_url).send().await?;
+    let remote_resp = client
+        .get(&remote_index_url)
+        .header("authorization", format!("Bearer {}", token))
+        .send()
+        .await?;
     if remote_resp.status().is_success() {
         let remote_index: IndexFile = remote_resp.json().await?;
 

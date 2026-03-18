@@ -339,83 +339,31 @@ This directory acts as the object store mechanism for the project, completely de
 
 To interact with the remote server safely and manage author metadata without reinventing the wheel, Rig employs a hybrid approach blending native Git paradigms with robust security standards.
 
-### Identity Sourcing (`.gitconfig`)
-For local commits and author identity tracking, Rig **automatically inherits your global `~/.gitconfig` configurations**. When you create a local `rig commit` or `rig push` to the server, Rig reads the `[user]` section (specifically `name` and `email`) from your `~/.gitconfig` and attaches these values to your Rig commits. 
-This means you do not need to configure an author name specifically for Rig; your existing Git identity translates seamlessly.
+### Secure Remote Operations (HTTP Tokens)
+When performing network operations like `pull` or `push`, relying on simple username/password authentication over arbitrary network requests is considered a security risk.
 
-### Secure Remote Operations (SSH Keys)
-When performing network operations like `pull` or `push`, relying on HTTP basic authentication (usernames and passwords) over arbitrary network requests is considered a security risk.
-Instead, **Rig requires SSH key-based authentication for remote operations**.
-1. **Pre-registration:** Users must first create a web account on the Rig server.
-2. **Key Registration:** Before executing any `rig clone`, `pull`, or `push` command, the user must upload their public SSH key to the Rig server dashboard.
-3. **Execution:** All rigorous network operations authorize the client by verifying their local private SSH key against the registered public key (`ssh_keys` database table). 
+Instead, **Rig uses token-based authentication over HTTP**.
+1. **Initiation**: CLI commands automatically trigger a Just-In-Time (JIT) browser-based login if credentials are missing.
+2. **Approval**: After the user logs in via the Web UI, an API token is issued to the client.
+3. **Execution**: The client stores this token securely and includes it in the `Authorization: Bearer <token>` header for all subsequent API requests.
 
-This ensures password-less, cryptographically secure collaboration.
+This ensures secure, cryptographically verifiable collaboration without persistent password entry.
 
 ## 4. Role-Based Access Control (RBAC) & Permissions
-
-As defined in the `permissions` table, Rig enforces strict Role-Based Access Control. Because Rig relies on exclusive locks (changing file permissions from `r--` to `rw-`), concurrent modification conflicts are structurally impossible. However, this introduces the need for robust access and override management:
-
-- **Read Access (`read`)**: Users with this level can only perform non-mutating operations: `clone`, `fetch`, `pull`, and `log`. They cannot acquire locks.
-- **Write Access (`write`)**: In addition to read privileges, these users can perform mutating operations on the repository: `lock`, `add`, `commit`, and `push`.
-- **Admin Access (`admin`)**: Admins have full control over the project. Crucially, because there are no timeouts on acquired locks, if a user acquires a lock and becomes unavailable (e.g., leaves the company or goes on vacation), an Admin must intervene. **Only users with the `admin` access level in the `permissions` table can execute `rig unlock <path> --force` to forcibly seize and release a lock** held by another user.
-
-### Mitigating Concurrency with Offline Commits
-While exclusive locks prevent simultaneous online edits, an architectural challenge arises when an offline user holds a lock on a binary asset, continues to create local `commit`s, but an Admin forces an unlock (`--force`). If another user acquires the freed lock and pushes, the offline user's subsequent push would cause an un-mergeable binary conflict. 
-
-To structurally prevent this data loss while preserving the ability to create offline commits (for branching and stashing), Rig enforces **Push-Time Lock Validation (Revocation Tokens & Lineage):**
-- **Lock Generation ID:** The `file_locks` table tracks a generation ID (or token) for every lock. 
-- **Validation on Push (Modifications):** When a client executes `rig push` to modify an existing `artifact_id`, it transmits the Lock Generation ID it held at the time of the commits, as well as the **Base Revision Hash** it started editing from.
-- **Hard Rejection (Authorization):** The server strictly compares the client's token against the current database state. If the server's lock state has mutated (e.g., forced unlocked and re-acquired by someone else), the server **hard-rejects the push**. The offline user's data remains safe locally, but they are prevented from corrupting the master server state.
-- **Hard Rejection (Stale Lineage):** To prevent regression, the server verifies the client's Base Revision Hash. If the client locked and edited an outdated revision (i.e., the base hash does not match the server's current `HEAD` for that artifact), the push is **hard-rejected**. 
-- **Namespace Collision Check (Ghost Creation Prevention):** If a client pushes a "new" file (e.g., bypassing `rig lock` and manually creating an asset over a 0-byte placeholder), the server must independently query its own `.rig/index` for that branch. If the logical path already maps to an existing `artifact_id`, the server **MUST demand a valid lock token** and hard-reject the push if none is provided. A "new file" push is only accepted if the logical path is genuinely unregistered.
-- **Server-Side Deletion Validation (Unlocked Deletion Prevention):** Removing a tracked file from the project is a terminal modification. When the server receives a new index tree during `rig push`, it computes a diff against the current branch index. For any `artifact_id` that is being **removed or unmapped**, the server **MUST demand a valid lock token** for that `artifact_id`. If a user attempts to delete a file locked by someone else (or a file they haven't locked themselves), the push is **hard-rejected**.
-
-## 5. Source Code vs. Asset Segregation
-
-A core philosophy of Rig is that it does **not** attempt to replace Git for source code version control. Text-based source code (e.g., `.rs`, `.py`, `.js`, `.cpp`) relies heavily on line-by-line diffing, auto-merging, and branching—features optimized for Git. 
-
-If a user attempts to run `rig add` on source code files, the Rig client will explicitly emit a warning.
-The intended workspace architecture for a project is:
-- **Binary Assets & Large Files**: Tracked natively by Rig's granular, lock-based `.rig/index`.
-- **Source Code**: Tracked in standard Git repositories, which are then mounted into the Rig workspace using the `rig gitmodule` system.
-
-This ensures that artists/designers get the binary-locking UX they need, while software engineers retain the standard Git tooling they expect, gracefully fused in one contiguous workspace directory.
-
-## 6. DB schema
-
-The server relies on a PostgreSQL database (`postgresql://kwang@localhost/rig`) to manage system state, authentication, and access control. 
-The core tables are:
-
-### `users`
-Manages system users and authentication credentials.
+...
+### 6. DB schema
+...
+### `tokens`
+Stores long-lived API tokens for CLI and tool access.
 - `id` (UUID, Primary Key)
+- `user_id` (UUID, Foreign Key → `users.id`)
+- `token_text` (Text, Unique)
 - `name` (Text)
-- `email` (Text, Unique)
-- `password_hash` (Text)
 - `created_at` (Timestamp)
+- `last_used_at` (Timestamp)
 
-### `projects`
-Stores high-level repository/project information.
-- `id` (UUID, Primary Key)
-- `name` (Text, Unique)
-- `owner_id` (UUID, Foreign Key → `users.id`)
-- `created_at` (Timestamp)
-
-### `permissions`
-Provides Role-Based Access Control (RBAC) tying users to projects.
-- `id` (UUID, Primary Key)
-- `user_id` (UUID, Foreign Key → `users.id`)
-- `project_id` (UUID, Foreign Key → `projects.id`)
-- `access` (Text: 'read', 'write', or 'admin')
-
-### `ssh_keys`
-Stores public SSH keys for secure artifact and git submodule access management.
-- `id` (UUID, Primary Key)
-- `user_id` (UUID, Foreign Key → `users.id`)
-- `title` (String)
-- `key_data` (Text)
-- `created_at` (Timestamp)
+### `file_locks`
+...
 
 ### `file_locks`
 Tracks explicit, granular file locks to prevent concurrent modifications on individual artifacts. Locks are tied to the immutable `artifact_id` rather than a mutable string path, ensuring locks remain valid even if the file is moved or renamed locally via `rig mv`. Furthermore, locks are **branch-isolated**, meaning a lock is granted for a specific artifact *on a specific branch*.

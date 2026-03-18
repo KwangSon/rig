@@ -21,6 +21,13 @@ pub struct UserState {
 pub type SharedUserState = Arc<Mutex<UserState>>;
 
 const JWT_SECRET: &str = "your-secret-key"; // TODO: use env var
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Claims {
+    pub sub: String,
+    pub exp: usize,
+}
+
 pub fn decode_token(token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
     decode::<Claims>(
         token,
@@ -29,10 +36,46 @@ pub fn decode_token(token: &str) -> Result<Claims, jsonwebtoken::errors::Error> 
     )
     .map(|data| data.claims)
 }
-#[derive(Serialize, Deserialize)]
-pub struct Claims {
-    pub sub: String, // user id
-    exp: u64,
+
+pub async fn authenticate_token(db: &PgPool, token: &str) -> Result<User, StatusCode> {
+    // 1. Try JWT
+    let user_id = if let Ok(claims) = decode_token(token) {
+        Uuid::parse_str(&claims.sub).ok()
+    } else {
+        None
+    };
+
+    let final_user_id = if let Some(id) = user_id {
+        id
+    } else {
+        // 2. Try DB tokens (PAT)
+        let row = sqlx::query("SELECT user_id FROM tokens WHERE token_text = $1")
+            .bind(token)
+            .fetch_optional(db)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .ok_or(StatusCode::UNAUTHORIZED)?;
+
+        let id: Uuid = row.get("user_id");
+        // Update last used
+        let _ =
+            sqlx::query("UPDATE tokens SET last_used_at = CURRENT_TIMESTAMP WHERE token_text = $1")
+                .bind(token)
+                .execute(db)
+                .await;
+        id
+    };
+
+    // Fetch user details
+    let user =
+        sqlx::query_as::<_, User>("SELECT id, name, email, password_hash FROM users WHERE id = $1")
+            .bind(final_user_id)
+            .fetch_optional(db)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    Ok(user)
 }
 
 pub async fn load_user_state(db: &PgPool) -> Result<UserState, sqlx::Error> {
@@ -177,7 +220,12 @@ pub async fn register_handler(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let final_name = if payload.name.trim().is_empty() {
-        payload.email.split('@').next().unwrap_or("user").to_string()
+        payload
+            .email
+            .split('@')
+            .next()
+            .unwrap_or("user")
+            .to_string()
     } else {
         payload.name.clone()
     };
@@ -204,7 +252,7 @@ pub async fn register_handler(
         exp: (std::time::SystemTime::now() + std::time::Duration::from_secs(24 * 60 * 60))
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_secs(),
+            .as_secs() as usize,
     };
     let token = encode(
         &Header::default(),
@@ -220,6 +268,7 @@ pub async fn register_handler(
 pub struct LoginRequest {
     pub email: String,
     pub password: String,
+    pub cli_session: Option<Uuid>,
 }
 
 pub async fn login_handler(
@@ -248,7 +297,7 @@ pub async fn login_handler(
         exp: (std::time::SystemTime::now() + std::time::Duration::from_secs(24 * 60 * 60))
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_secs(),
+            .as_secs() as usize,
     };
     let token = encode(
         &Header::default(),
@@ -256,6 +305,16 @@ pub async fn login_handler(
         &EncodingKey::from_secret(JWT_SECRET.as_ref()),
     )
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // If cli_session is provided, approve it automatically
+    if let Some(session_id) = payload.cli_session {
+        crate::auth::approve_session(&db, session_id, user.id)
+            .await
+            .map_err(|e| {
+                eprintln!("Failed to approve CLI session: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+    }
 
     Ok(Json(AuthResponse { token, user }))
 }
@@ -270,22 +329,7 @@ pub async fn me_handler(
         .and_then(|h| h.strip_prefix("Bearer "))
         .ok_or(StatusCode::UNAUTHORIZED)?;
 
-    let token_data = decode::<Claims>(
-        auth_header,
-        &DecodingKey::from_secret(JWT_SECRET.as_ref()),
-        &Validation::default(),
-    )
-    .map_err(|_| StatusCode::UNAUTHORIZED)?;
-
-    let user_id: Uuid = Uuid::parse_str(&token_data.claims.sub).unwrap();
-
-    let user =
-        sqlx::query_as::<_, User>("SELECT id, name, email, password_hash FROM users WHERE id = $1")
-            .bind(user_id)
-            .fetch_optional(&db)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            .ok_or(StatusCode::UNAUTHORIZED)?;
+    let user = authenticate_token(&db, auth_header).await?;
 
     Ok(Json(user))
 }

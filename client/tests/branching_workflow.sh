@@ -9,7 +9,7 @@ SERVER_URL="http://localhost:3000"
 API_URL="$SERVER_URL/api/v1"
 
 ADMIN_EMAIL="admin@example.com"
-ADMIN_PASSWORD=""
+ADMIN_PASSWORD="admin123"
 
 function cleanup {
     echo -e "\n--- Cleaning up ---"
@@ -36,8 +36,13 @@ curl -s -X POST "$API_URL/create_project" \
     -H "Authorization: Bearer $AUTH_TOKEN" \
     -d "{\"name\":\"$PROJECT_NAME\"}" > /dev/null
 
+# Set token for rig client
+mkdir -p ~/.config/rig
+echo "{\"host_tokens\":{\"$SERVER_URL\":\"$AUTH_TOKEN\"}}" > ~/.config/rig/credentials
+chmod 600 ~/.config/rig/credentials
+
 # Clone
-"$RIG_BIN" clone "ssh://rig@localhost:2222/admin/$PROJECT_NAME" "$PROJECT_NAME" --username "DevUser"
+"$RIG_BIN" clone "$SERVER_URL/admin/$PROJECT_NAME" "$PROJECT_NAME" --username "DevUser"
 cd "$PROJECT_NAME"
 
 # Commit base file

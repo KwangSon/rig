@@ -1,6 +1,6 @@
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::Json,
 };
 use base64::{Engine as _, engine::general_purpose};
@@ -10,7 +10,7 @@ use sqlx::Row;
 use std::fs;
 use uuid::Uuid;
 
-use crate::{AppState, LockRequest, LockResponse, SharedState, UnlockRequest};
+use crate::{AppState, CombinedState, LockRequest, LockResponse, SharedState, UnlockRequest};
 use protocol::{Artifact, Revision};
 
 #[derive(Deserialize)]
@@ -67,10 +67,39 @@ fn get_rev_filename(id: &str, rev: u32) -> String {
 
 pub async fn create_artifact_handler(
     Path(project): Path<String>,
-    State(state): State<SharedState>,
+    headers: HeaderMap,
+    State(combined): State<CombinedState>,
     Json(payload): Json<CreateArtifactRequest>,
 ) -> (StatusCode, Json<CreateArtifactResponse>) {
-    let mut projects = state.lock().await;
+    let auth_header = match headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+    {
+        Some(h) => h,
+        None => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(CreateArtifactResponse {
+                    artifact_id: payload.path,
+                }),
+            );
+        }
+    };
+
+    if crate::users::authenticate_token(&combined.db, auth_header)
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(CreateArtifactResponse {
+                artifact_id: payload.path,
+            }),
+        );
+    }
+
+    let mut projects = combined.projects.lock().await;
     let app_state = match projects.get_mut(&project) {
         Some(s) => s,
         None => {
@@ -181,10 +210,35 @@ pub async fn get_artifact_info_handler(
 
 pub async fn create_revision_handler(
     Path((project, id)): Path<(String, String)>,
-    State(state): State<SharedState>,
+    headers: HeaderMap,
+    State(combined): State<CombinedState>,
     Json(payload): Json<CreateRevisionRequest>,
 ) -> (StatusCode, Json<CreateRevisionResponse>) {
-    let mut projects = state.lock().await;
+    let auth_header = match headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+    {
+        Some(h) => h,
+        None => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(CreateRevisionResponse { revision: 0 }),
+            );
+        }
+    };
+
+    if crate::users::authenticate_token(&combined.db, auth_header)
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(CreateRevisionResponse { revision: 0 }),
+        );
+    }
+
+    let mut projects = combined.projects.lock().await;
     let app_state = match projects.get_mut(&project) {
         Some(s) => s,
         None => {
@@ -268,11 +322,41 @@ pub async fn get_revisions_handler(
 
 pub async fn lock_handler(
     Path((project, id)): Path<(String, String)>,
-    State(state): State<SharedState>,
-    State(db): State<sqlx::PgPool>,
+    headers: HeaderMap,
+    State(combined): State<CombinedState>,
     Json(payload): Json<LockRequest>,
 ) -> (StatusCode, Json<LockResponse>) {
-    let mut projects = state.lock().await;
+    let auth_header = match headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+    {
+        Some(h) => h,
+        None => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(LockResponse {
+                    locked: false,
+                    user: None,
+                }),
+            );
+        }
+    };
+
+    let user = match crate::users::authenticate_token(&combined.db, auth_header).await {
+        Ok(u) => u,
+        Err(status) => {
+            return (
+                status,
+                Json(LockResponse {
+                    locked: false,
+                    user: None,
+                }),
+            );
+        }
+    };
+
+    let mut projects = combined.projects.lock().await;
     let app_state = match projects.get_mut(&project) {
         Some(s) => s,
         None => {
@@ -288,7 +372,7 @@ pub async fn lock_handler(
 
     if let Some(artifact) = app_state.artifacts.get_mut(&id) {
         if artifact.locked_by.is_none() {
-            artifact.locked_by = Some(payload.user.clone());
+            artifact.locked_by = Some(user.name.clone());
             // Persist lock state
             if let Err(e) = persist_index(app_state) {
                 eprintln!("Failed to persist lock state: {}", e);
@@ -300,23 +384,23 @@ pub async fn lock_handler(
             )
             .bind(&project)
             .bind(&id)
-            .bind(&payload.user)
-            .execute(&db)
+            .bind(&user.name)
+            .execute(&combined.db)
             .await;
             (
                 StatusCode::OK,
                 Json(LockResponse {
                     locked: true,
-                    user: Some(payload.user),
+                    user: Some(user.name),
                 }),
             )
-        } else if artifact.locked_by == Some(payload.user.clone()) {
+        } else if artifact.locked_by == Some(user.name.clone()) {
             // Already locked by the same user: treat as success
             (
                 StatusCode::OK,
                 Json(LockResponse {
                     locked: true,
-                    user: Some(payload.user),
+                    user: Some(user.name),
                 }),
             )
         } else {
@@ -341,12 +425,41 @@ pub async fn lock_handler(
 
 pub async fn unlock_handler(
     Path((project, id)): Path<(String, String)>,
-    State(state): State<SharedState>,
-    State(user_state): State<crate::users::SharedUserState>,
-    State(db): State<sqlx::PgPool>,
+    headers: HeaderMap,
+    State(combined): State<CombinedState>,
     Json(payload): Json<UnlockRequest>,
 ) -> (StatusCode, Json<LockResponse>) {
-    let mut projects = state.lock().await;
+    let auth_header = match headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+    {
+        Some(h) => h,
+        None => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(LockResponse {
+                    locked: false,
+                    user: None,
+                }),
+            );
+        }
+    };
+
+    let user = match crate::users::authenticate_token(&combined.db, auth_header).await {
+        Ok(u) => u,
+        Err(status) => {
+            return (
+                status,
+                Json(LockResponse {
+                    locked: false,
+                    user: None,
+                }),
+            );
+        }
+    };
+
+    let mut projects = combined.projects.lock().await;
     let app_state = match projects.get_mut(&project) {
         Some(s) => s,
         None => {
@@ -364,44 +477,37 @@ pub async fn unlock_handler(
         if let Some(ref locked_by) = artifact.locked_by {
             let mut allow_unlock = false;
 
-            if locked_by == &payload.user {
+            if locked_by == &user.name {
                 allow_unlock = true;
             } else if payload.force {
                 // Check if user has force-unlock permissions (admin)
-                let users_data = user_state.lock().await;
-                let user_id = users_data
-                    .users
-                    .iter()
-                    .find(|u| u.name == payload.user)
-                    .map(|u| u.id);
+                let is_global_admin = user.email == "admin@example.com";
 
-                if let Some(uid) = user_id {
-                    let is_global_admin = users_data
-                        .users
-                        .iter()
-                        .find(|u| u.id == uid)
-                        .map(|u| u.email == "admin@example.com")
-                        .unwrap_or(false);
+                // We need the project's UUID to check permissions in the new schema
+                let project_id_query = sqlx::query("SELECT id FROM projects WHERE name = $1")
+                    .bind(&project)
+                    .fetch_optional(&combined.db)
+                    .await;
 
-                    // We need the project's UUID to check permissions in the new schema
-                    let project_id_query = sqlx::query("SELECT id FROM projects WHERE name = $1")
-                        .bind(&project)
-                        .fetch_optional(&db)
-                        .await;
-
-                    let has_project_admin = if let Ok(Some(row)) = project_id_query {
-                        let pid: Uuid = row.get("id");
-                        users_data
-                            .permissions
-                            .iter()
-                            .any(|p| p.user_id == uid && p.project_id == pid && p.access == "admin")
-                    } else {
-                        false
-                    };
-
-                    if is_global_admin || has_project_admin {
-                        allow_unlock = true;
+                let has_project_admin = if let Ok(Some(row)) = project_id_query {
+                    let pid: Uuid = row.get("id");
+                    let perm_row = sqlx::query(
+                        "SELECT access FROM permissions WHERE user_id = $1 AND project_id = $2",
+                    )
+                    .bind(user.id)
+                    .bind(pid)
+                    .fetch_optional(&combined.db)
+                    .await;
+                    match perm_row {
+                        Ok(Some(p)) => p.get::<String, _>("access") == "admin",
+                        _ => false,
                     }
+                } else {
+                    false
+                };
+
+                if is_global_admin || has_project_admin {
+                    allow_unlock = true;
                 }
             }
 
@@ -416,7 +522,7 @@ pub async fn unlock_handler(
                 let _ = sqlx::query("DELETE FROM file_locks WHERE project = $1 AND file_path = $2")
                     .bind(&project)
                     .bind(&id)
-                    .execute(&db)
+                    .execute(&combined.db)
                     .await;
                 (
                     StatusCode::OK,
@@ -478,28 +584,48 @@ pub async fn get_lock_handler(
 pub async fn get_index_handler(
     Path(project): Path<String>,
     State(state): State<SharedState>,
-) -> Json<serde_json::Value> {
+) -> (StatusCode, Json<serde_json::Value>) {
     let projects = state.lock().await;
     if let Some(app_state) = projects.get(&project) {
         let index_path = app_state.project_dir.join("index");
         if let Ok(content) = fs::read_to_string(&index_path)
             && let Ok(value) = serde_json::from_str(&content)
         {
-            return Json(value);
+            return (StatusCode::OK, Json(value));
         }
     }
 
-    Json(serde_json::json!({
-        "error": "project not found",
-    }))
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({
+            "error": "project not found",
+        })),
+    )
 }
 
 pub async fn update_gitmodule_handler(
     Path((project, path)): Path<(String, String)>,
-    State(state): State<SharedState>,
+    headers: HeaderMap,
+    State(combined): State<CombinedState>,
     Json(payload): Json<protocol::GitModule>,
 ) -> StatusCode {
-    let mut projects = state.lock().await;
+    let auth_header = match headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+    {
+        Some(h) => h,
+        None => return StatusCode::UNAUTHORIZED,
+    };
+
+    if crate::users::authenticate_token(&combined.db, auth_header)
+        .await
+        .is_err()
+    {
+        return StatusCode::UNAUTHORIZED;
+    }
+
+    let mut projects = combined.projects.lock().await;
     let app_state = match projects.get_mut(&project) {
         Some(s) => s,
         None => return StatusCode::NOT_FOUND,
@@ -615,11 +741,35 @@ pub struct PushMetadata {
 
 pub async fn push_handler(
     Path(project): Path<String>,
-    State(state): State<SharedState>,
-    State(db): State<sqlx::PgPool>,
+    headers: HeaderMap,
+    State(combined): State<CombinedState>,
     mut multipart: Multipart,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    let mut projects = state.lock().await;
+    let auth_header = match headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+    {
+        Some(h) => h,
+        None => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({"error": "Unauthorized"})),
+            );
+        }
+    };
+
+    if crate::users::authenticate_token(&combined.db, auth_header)
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error": "Invalid token"})),
+        );
+    }
+
+    let mut projects = combined.projects.lock().await;
     let app_state = match projects.get_mut(&project) {
         Some(s) => s,
         None => {
@@ -703,7 +853,7 @@ pub async fn push_handler(
             let _ = sqlx::query("DELETE FROM file_locks WHERE project = $1 AND file_path = $2")
                 .bind(&project)
                 .bind(&id)
-                .execute(&db)
+                .execute(&combined.db)
                 .await;
         } else {
             // New artifact

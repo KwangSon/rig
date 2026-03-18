@@ -1,18 +1,16 @@
 use crate::GitModuleCommands;
+use crate::auth::ensure_authenticated;
+use crate::repository::Repository;
 use protocol::{GitModule, IndexFile};
 use std::fs;
 use std::process::Command;
 
 pub async fn run(subcommand: &GitModuleCommands) -> Result<(), Box<dyn std::error::Error>> {
     let current_dir = std::env::current_dir()?;
-    let rig_dir = current_dir.join(".rig");
-    if !rig_dir.exists() {
-        return Err("Not a rig repository".into());
-    }
+    let repo = Repository::open(&current_dir)?;
 
-    let index_path = rig_dir.join("index");
-    let index_content = fs::read_to_string(&index_path)?;
-    let mut index: IndexFile = serde_json::from_str(&index_content)?;
+    let mut index = repo.read_index()?;
+    let config = repo.read_config()?;
 
     match subcommand {
         GitModuleCommands::Add { url, path, commit } => {
@@ -48,16 +46,27 @@ pub async fn run(subcommand: &GitModuleCommands) -> Result<(), Box<dyn std::erro
 
             // Update server
             let client = reqwest::Client::new();
-            let server_url = index
+            let server_url = config
                 .server_url
                 .as_ref()
                 .ok_or("Server URL not configured")?;
+
+            let token = match ensure_authenticated(server_url).await {
+                Ok(t) => t,
+                Err(e) => return Err(format!("Authentication failed: {}", e).into()),
+            };
+
             let api_url = format!(
                 "{}/api/v1/{}/gitmodules/{}",
-                server_url, index.project, path_str
+                server_url, config.project, path_str
             );
 
-            let resp = client.put(&api_url).json(&module).send().await?;
+            let resp = client
+                .put(&api_url)
+                .header("authorization", format!("Bearer {}", token))
+                .json(&module)
+                .send()
+                .await?;
             if !resp.status().is_success() {
                 return Err(
                     format!("Failed to update gitmodule on server: {}", resp.status()).into(),
@@ -65,7 +74,7 @@ pub async fn run(subcommand: &GitModuleCommands) -> Result<(), Box<dyn std::erro
             }
 
             index.git_modules.insert(path_str, module);
-            fs::write(&index_path, serde_json::to_string_pretty(&index)?)?;
+            repo.write_index(&index)?;
             println!("Added gitmodule at {}", path.display());
         }
         GitModuleCommands::Update { path, commit } => {
@@ -80,16 +89,27 @@ pub async fn run(subcommand: &GitModuleCommands) -> Result<(), Box<dyn std::erro
 
             // Update server
             let client = reqwest::Client::new();
-            let server_url = index
+            let server_url = config
                 .server_url
                 .as_ref()
                 .ok_or("Server URL not configured")?;
+
+            let token = match ensure_authenticated(server_url).await {
+                Ok(t) => t,
+                Err(e) => return Err(format!("Authentication failed: {}", e).into()),
+            };
+
             let api_url = format!(
                 "{}/api/v1/{}/gitmodules/{}",
-                server_url, index.project, path_str
+                server_url, config.project, path_str
             );
 
-            let resp = client.put(&api_url).json(&module).send().await?;
+            let resp = client
+                .put(&api_url)
+                .header("authorization", format!("Bearer {}", token))
+                .json(&module)
+                .send()
+                .await?;
             if !resp.status().is_success() {
                 return Err(
                     format!("Failed to update gitmodule on server: {}", resp.status()).into(),
@@ -97,7 +117,7 @@ pub async fn run(subcommand: &GitModuleCommands) -> Result<(), Box<dyn std::erro
             }
 
             index.git_modules.insert(path_str, module);
-            fs::write(&index_path, serde_json::to_string_pretty(&index)?)?;
+            repo.write_index(&index)?;
             println!(
                 "Updated gitmodule at {} to commit {}",
                 path.display(),

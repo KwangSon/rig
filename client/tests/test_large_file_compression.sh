@@ -12,7 +12,7 @@ API_URL="$SERVER_URL/api/v1"
 
 # Credentials
 ADMIN_EMAIL="admin@example.com"
-ADMIN_PASSWORD=""
+ADMIN_PASSWORD="admin123"
 
 # Save option check
 SAVE_PROJECT=false
@@ -47,6 +47,12 @@ echo "=== Starting Large File & Compression Test ==="
 # 0. Login & Create Project
 LOGIN_RESP=$(curl -s -X POST "$API_URL/login" -H "Content-Type: application/json" -d "{\"email\":\"$ADMIN_EMAIL\", \"password\":\"$ADMIN_PASSWORD\"}")
 AUTH_TOKEN=$(echo $LOGIN_RESP | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+
+# Inject token for rig client
+mkdir -p ~/.config/rig
+echo "{\"host_tokens\":{\"$SERVER_URL\":\"$AUTH_TOKEN\"}}" > ~/.config/rig/credentials
+chmod 600 ~/.config/rig/credentials
+
 curl -s -X POST "$API_URL/create_project" -H "Content-Type: application/json" -H "Authorization: Bearer $AUTH_TOKEN" -d "{\"name\":\"$PROJECT_NAME\"}" > /dev/null
 
 # 1. Generate 4MB mixed file (2MB zero + 2MB random)

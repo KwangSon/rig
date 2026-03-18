@@ -1,3 +1,4 @@
+use crate::auth::ensure_authenticated;
 use crate::repository::Repository;
 use protocol::IndexFile;
 
@@ -15,9 +16,15 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or("http://localhost:3000");
     let remote_index_url = format!("{}/api/v1/{}/index", server_url, config.project);
 
+    let token = match ensure_authenticated(server_url).await {
+        Ok(t) => t,
+        Err(e) => return Err(format!("Authentication failed: {}", e).into()),
+    };
+
     println!("-> Fetching remote metadata from {}...", remote_index_url);
     let resp = client
         .get(&remote_index_url)
+        .header("authorization", format!("Bearer {}", token))
         .send()
         .await
         .map_err(|e| format!("Failed to fetch remote index: {}", e))?;
