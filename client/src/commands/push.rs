@@ -23,16 +23,14 @@ pub async fn run(_message_opt: Option<String>) -> Result<(), Box<dyn std::error:
     let repo = Repository::open(&current_dir)?;
 
     let mut local_index = repo.read_index()?;
-    let config = repo.read_config()?;
-
-    let head_hash = match repo.head_commit()? {
-        Some(hash) => hash,
-        None => return Err("No local commits to push. Run 'rig commit' first.".into()),
+    let commit = if let Some(commit_hash) = repo.head_commit()? {
+        repo.read_commit(&commit_hash)?
+            .ok_or("Latest commit not found locally")?
+    } else {
+        return Err("No local commits to push. Run 'rig commit' first.".into());
     };
 
-    let commit = repo
-        .read_commit(&head_hash)?
-        .ok_or("Latest commit not found locally")?;
+    let config = repo.read_config()?;
 
     println!(
         "Preparing to push commit: {} ('{}')",
@@ -85,19 +83,12 @@ pub async fn run(_message_opt: Option<String>) -> Result<(), Box<dyn std::error:
             .as_ref()
             .ok_or_else(|| format!("Artifact '{}' was not staged via 'rig add'", path))?;
 
-        let mut needs_recompute = false;
-        if current_size != staged.size {
-            needs_recompute = true;
-        } else if current_mtime != staged.mtime {
-            needs_recompute = true;
-        } else {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)?
-                .as_secs();
-            if (now - staged.mtime) < 1 {
-                needs_recompute = true;
-            }
-        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs();
+        let needs_recompute = current_size != staged.size
+            || current_mtime != staged.mtime
+            || (now.saturating_sub(staged.mtime)) < 1;
 
         let hash_to_check = if needs_recompute {
             let data = fs::read(&local_path)?;
@@ -200,7 +191,7 @@ pub async fn run(_message_opt: Option<String>) -> Result<(), Box<dyn std::error:
     );
 
     // 4. Synchronize local state
-    let remote_index_url = format!("{}/api/v1/{}/index.json", server_url, config.project);
+    let remote_index_url = format!("{}/api/v1/{}/index", server_url, config.project);
     let remote_resp = client.get(&remote_index_url).send().await?;
     if remote_resp.status().is_success() {
         let remote_index: IndexFile = remote_resp.json().await?;

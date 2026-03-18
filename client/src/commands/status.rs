@@ -13,7 +13,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config = repo.read_config()?;
 
     // Read the actual Commit object string from the hash stored in HEAD
-    let latest_commit = if let Ok(Some(hash)) = repo.head_commit() {
+    let _latest_commit = if let Ok(Some(hash)) = repo.head_commit() {
         repo.read_commit(&hash).unwrap_or(None)
     } else {
         None
@@ -25,7 +25,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut untracked_files = Vec::new();
     let mut modified_files = Vec::new(); // Writable files
     let mut staged_files = Vec::new(); // Added but not in any commit yet
-    let mut committed_files: Vec<String> = Vec::new(); // In index, in latest commit, but latest is 0 (not pushed)
+    let committed_files: Vec<String> = Vec::new(); // In index, in latest commit, but latest is 0 (not pushed)
 
     // Helper to scan recursively
     fn collect_files(dir: &PathBuf, base: &PathBuf) -> Vec<PathBuf> {
@@ -73,7 +73,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // Check for missing files
     let mut missing_files = Vec::new();
-    for (path, _) in &local_index.artifacts {
+    for path in local_index.artifacts.keys() {
         let full_path = current_dir.join(path);
         if !full_path.exists() {
             missing_files.push(path.clone());

@@ -48,14 +48,14 @@ impl Repository {
     // --- Config ---
 
     pub fn read_config(&self) -> Result<Config, Box<dyn std::error::Error>> {
-        let content = fs::read_to_string(self.rig_dir.join("config.json"))?;
+        let content = fs::read_to_string(self.rig_dir.join("config"))?;
         let config: Config = serde_json::from_str(&content)?;
         Ok(config)
     }
 
     pub fn write_config(&self, config: &Config) -> Result<(), Box<dyn std::error::Error>> {
         let content = serde_json::to_string_pretty(config)?;
-        fs::write(self.rig_dir.join("config.json"), content)?;
+        fs::write(self.rig_dir.join("config"), content)?;
         Ok(())
     }
 

@@ -1,22 +1,9 @@
-use crate::repository::{Index, Repository};
-use protocol::{Artifact, Revision};
-use sha1::{Digest, Sha1};
+use crate::repository::Repository;
+
 use std::fs;
-use std::path::PathBuf;
 use uuid::Uuid;
 
-fn resolve_artifact_id(index: &Index, query: &str) -> Option<String> {
-    if index.artifacts.contains_key(query) {
-        return Some(query.to_string());
-    }
-    index
-        .artifacts
-        .iter()
-        .find(|(path, _)| path == &query)
-        .map(|(path, _)| path.clone())
-}
-
-pub async fn run(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     let path_str = path.to_string_lossy().to_string();
     println!("Running rig add (local) for path: {}", path_str);
 

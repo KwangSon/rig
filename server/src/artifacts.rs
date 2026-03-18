@@ -123,9 +123,9 @@ pub async fn create_artifact_handler(
         },
     );
 
-    // Persist index.json (best-effort)
+    // Persist index (best-effort)
     if let Err(e) = persist_index(app_state) {
-        eprintln!("Failed to persist index.json: {}", e);
+        eprintln!("Failed to persist index: {}", e);
     }
 
     (
@@ -235,9 +235,9 @@ pub async fn create_revision_handler(
         .revisions
         .push(Revision::new(new_rev, &bytes, false));
 
-    // Persist index.json (best-effort)
+    // Persist index (best-effort)
     if let Err(e) = persist_index(app_state) {
-        eprintln!("Failed to persist index.json: {}", e);
+        eprintln!("Failed to persist index: {}", e);
     }
 
     (
@@ -481,7 +481,7 @@ pub async fn get_index_handler(
 ) -> Json<serde_json::Value> {
     let projects = state.lock().await;
     if let Some(app_state) = projects.get(&project) {
-        let index_path = app_state.project_dir.join("index.json");
+        let index_path = app_state.project_dir.join("index");
         if let Ok(content) = fs::read_to_string(&index_path)
             && let Ok(value) = serde_json::from_str(&content)
         {
@@ -516,7 +516,7 @@ pub async fn update_gitmodule_handler(
 }
 
 fn persist_index(app_state: &AppState) -> Result<(), String> {
-    let index_path = app_state.project_dir.join("index.json");
+    let index_path = app_state.project_dir.join("index");
     let mut index_value: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&index_path).map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
@@ -659,8 +659,8 @@ pub async fn push_handler(
 
     let mut commits_map = std::collections::HashMap::new();
 
-    // Read index.json to get current state
-    let index_path = app_state.project_dir.join("index.json");
+    // Read index to get current state
+    let index_path = app_state.project_dir.join("index");
     let mut server_refs = std::collections::HashMap::new();
     if let Ok(index_content) = fs::read_to_string(&index_path)
         && let Ok(index_val) = serde_json::from_str::<serde_json::Value>(&index_content)
@@ -781,7 +781,7 @@ pub async fn push_handler(
         .unwrap_or_else(|| "refs/heads/main".to_string());
     server_refs.insert(ref_name, new_hash.clone());
 
-    // Update index.json
+    // Update index
     let mut full_index: protocol::IndexFile = protocol::IndexFile {
         project: project.clone(),
         server_url: None,

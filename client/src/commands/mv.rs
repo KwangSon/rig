@@ -1,17 +1,6 @@
-use crate::repository::{Index, Repository};
+use crate::repository::Repository;
 use std::fs;
 use std::path::PathBuf;
-
-fn resolve_artifact_id(index: &Index, query: &str) -> Option<String> {
-    if index.artifacts.contains_key(query) {
-        return Some(query.to_string());
-    }
-    index
-        .artifacts
-        .iter()
-        .find(|(path, _)| path == &query)
-        .map(|(path, _)| path.clone())
-}
 
 pub async fn run(src: PathBuf, dst: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let src_str = src.to_string_lossy().to_string();

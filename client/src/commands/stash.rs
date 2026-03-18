@@ -1,6 +1,6 @@
 use crate::commands::{add, commit, push};
 use crate::repository::Repository;
-use sha1::Digest;
+
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -97,51 +97,51 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     repo.write_head(&original_head)?;
 
     // Re-setup the working tree based on the original commit
-    if let Some(commit_hash) = repo.head_commit()? {
-        if let Some(original_commit) = repo.read_commit(&commit_hash)? {
-            use std::os::unix::fs::PermissionsExt;
-            let mut index = repo.read_index()?;
+    if let Some(commit_hash) = repo.head_commit()?
+        && let Some(original_commit) = repo.read_commit(&commit_hash)?
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut index = repo.read_index()?;
 
-            // Remove currently tracked files
-            for path in index.artifacts.keys() {
-                let file_path = current_dir.join(path);
-                if file_path.exists() {
-                    let _ = fs::set_permissions(&file_path, fs::Permissions::from_mode(0o644));
-                    let _ = fs::remove_file(&file_path);
-                }
+        // Remove currently tracked files
+        for path in index.artifacts.keys() {
+            let file_path = current_dir.join(path);
+            if file_path.exists() {
+                let _ = fs::set_permissions(&file_path, fs::Permissions::from_mode(0o644));
+                let _ = fs::remove_file(&file_path);
             }
-
-            // Rebuild index.artifacts from the original commit's artifacts
-            index.artifacts.clear();
-
-            for commit_artifact in &original_commit.artifacts {
-                let path = &commit_artifact.path;
-                index.artifacts.insert(
-                    path.clone(),
-                    protocol::IndexArtifact {
-                        artifact_id: commit_artifact.artifact_id.clone(),
-                        revision: commit_artifact.revision_base,
-                        local_state: "placeholder".to_string(),
-                        stage: "none".to_string(),
-                        locked: false,
-                        lock_owner: None,
-                        lock_generation: None,
-                        staged: None,
-                        moved_from: None,
-                    },
-                );
-
-                let file_path = current_dir.join(path);
-                if let Some(parent) = file_path.parent() {
-                    fs::create_dir_all(parent).ok();
-                }
-                if fs::write(&file_path, b"").is_ok() {
-                    let _ = fs::set_permissions(&file_path, fs::Permissions::from_mode(0o444));
-                }
-            }
-
-            repo.write_index(&index)?;
         }
+
+        // Rebuild index.artifacts from the original commit's artifacts
+        index.artifacts.clear();
+
+        for commit_artifact in &original_commit.artifacts {
+            let path = &commit_artifact.path;
+            index.artifacts.insert(
+                path.clone(),
+                protocol::IndexArtifact {
+                    artifact_id: commit_artifact.artifact_id.clone(),
+                    revision: commit_artifact.revision_base,
+                    local_state: "placeholder".to_string(),
+                    stage: "none".to_string(),
+                    locked: false,
+                    lock_owner: None,
+                    lock_generation: None,
+                    staged: None,
+                    moved_from: None,
+                },
+            );
+
+            let file_path = current_dir.join(path);
+            if let Some(parent) = file_path.parent() {
+                fs::create_dir_all(parent).ok();
+            }
+            if fs::write(&file_path, b"").is_ok() {
+                let _ = fs::set_permissions(&file_path, fs::Permissions::from_mode(0o444));
+            }
+        }
+
+        repo.write_index(&index)?;
     }
 
     println!("\nStash successful! Your changes are safely shelved on the server.");

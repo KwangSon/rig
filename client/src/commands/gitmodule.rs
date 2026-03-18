@@ -10,7 +10,7 @@ pub async fn run(subcommand: &GitModuleCommands) -> Result<(), Box<dyn std::erro
         return Err("Not a rig repository".into());
     }
 
-    let index_path = rig_dir.join("index.json");
+    let index_path = rig_dir.join("index");
     let index_content = fs::read_to_string(&index_path)?;
     let mut index: IndexFile = serde_json::from_str(&index_content)?;
 

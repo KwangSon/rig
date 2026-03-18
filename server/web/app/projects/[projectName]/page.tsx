@@ -9,7 +9,9 @@ const API_BASE = "http://localhost:3000/api/v1";
 interface Project {
   name: string;
   owner_id: string;
-  clone_url?: string; // Assuming clone_url is available
+  owner_name?: string;
+  clone_url_ssh?: string;
+  clone_url_http?: string;
 }
 
 interface User {
@@ -107,8 +109,9 @@ export default function ProjectPage() {
         return;
       }
       const projectData: Project = await projectRes.json();
-      // Use SSH for clone command
-      projectData.clone_url = `ssh://rig@localhost:2222/${projectData.name}`;
+      const ownerName = projectData.owner_name || "User";
+      projectData.clone_url_ssh = `ssh://rig@localhost:2222/${ownerName}/${projectData.name}`;
+      projectData.clone_url_http = `http://localhost:3000/${ownerName}/${projectData.name}`;
       setProject(projectData);
 
       // Fetch all users and permissions if logged in
@@ -199,7 +202,7 @@ export default function ProjectPage() {
               {project.owner_id.charAt(0).toUpperCase()}
             </div>
             <span className="cursor-pointer font-medium text-gray-500 hover:text-indigo-600 hover:underline">
-              User
+              {project.owner_name || "User"}
             </span>
             <span className="text-gray-400">/</span>
             <span className="font-bold text-gray-900">{project.name}</span>
@@ -292,16 +295,33 @@ export default function ProjectPage() {
               </div>
             )}
           </div>
-          {project.clone_url && (
-            <div className="border-t border-gray-200 px-4 py-4 sm:px-6">
+          {(project.clone_url_ssh || project.clone_url_http) && (
+            <div className="border-t border-gray-200 px-4 py-4 sm:px-6 space-y-3">
               <div className="flex items-center justify-between rounded border border-gray-300 bg-gray-50 p-3">
+                <span className="text-xs font-bold text-gray-500 tracking-wider uppercase mr-4 w-12">SSH</span>
                 <p className="flex-1 overflow-auto font-mono text-sm text-gray-800">
-                  rig clone {project.clone_url}
+                  rig clone {project.clone_url_ssh}
                 </p>
                 <button
                   onClick={() =>
                     navigator.clipboard.writeText(
-                      `rig clone ${project.clone_url}`,
+                      `rig clone ${project.clone_url_ssh}`,
+                    )
+                  }
+                  className="ml-4 rounded-md border border-indigo-200 bg-indigo-50 px-3 py-1 text-sm font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 focus:outline-none"
+                >
+                  Copy
+                </button>
+              </div>
+              <div className="flex items-center justify-between rounded border border-gray-300 bg-gray-50 p-3">
+                <span className="text-xs font-bold text-gray-500 tracking-wider uppercase mr-4 w-12">HTTP</span>
+                <p className="flex-1 overflow-auto font-mono text-sm text-gray-800">
+                  rig clone {project.clone_url_http}
+                </p>
+                <button
+                  onClick={() =>
+                    navigator.clipboard.writeText(
+                      `rig clone ${project.clone_url_http}`,
                     )
                   }
                   className="ml-4 rounded-md border border-indigo-200 bg-indigo-50 px-3 py-1 text-sm font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 focus:outline-none"

@@ -176,10 +176,16 @@ pub async fn register_handler(
     let password_hash = bcrypt::hash(payload.password, bcrypt::DEFAULT_COST)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    let final_name = if payload.name.trim().is_empty() {
+        payload.email.split('@').next().unwrap_or("user").to_string()
+    } else {
+        payload.name.clone()
+    };
+
     let user = sqlx::query_as::<_, User>(
         "INSERT INTO users (name, email, password_hash) VALUES ($1, $2, $3) RETURNING id, name, email, password_hash",
     )
-    .bind(&payload.name)
+    .bind(&final_name)
     .bind(&payload.email)
     .bind(&password_hash)
     .fetch_one(&db)

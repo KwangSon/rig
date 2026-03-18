@@ -187,7 +187,7 @@ async fn main() {
             "/users/me/ssh-keys/{id}",
             delete(keys::delete_user_key_handler),
         )
-        .route("/{project}/index.json", get(artifacts::get_index_handler))
+        .route("/{project}/index", get(artifacts::get_index_handler))
         .route(
             "/{project}/artifacts",
             post(artifacts::create_artifact_handler).get(artifacts::get_artifacts_handler),
@@ -233,7 +233,7 @@ async fn main() {
 }
 
 fn load_project_state(project_dir: &StdPath) -> Result<AppState, String> {
-    let index_path = project_dir.join("index.json");
+    let index_path = project_dir.join("index");
     let index_content = fs::read_to_string(&index_path).map_err(|e| e.to_string())?;
     let index: serde_json::Value =
         serde_json::from_str(&index_content).map_err(|e| e.to_string())?;
@@ -415,8 +415,8 @@ async fn create_project_handler(
         );
     }
 
-    // Create initial index.json with all required fields
-    let index_path = project_dir.join("index.json");
+    // Create initial index with all required fields
+    let index_path = project_dir.join("index");
     let initial_index = serde_json::json!({
         "project": payload.name,
         "server_url": "http://localhost:3000",
@@ -433,7 +433,7 @@ async fn create_project_handler(
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(CreateProjectResponse {
-                message: "Failed to create index.json".to_string(),
+                message: "Failed to create index".to_string(),
             }),
         );
     }

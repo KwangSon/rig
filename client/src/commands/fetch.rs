@@ -13,18 +13,18 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .server_url
         .as_deref()
         .unwrap_or("http://localhost:3000");
-    let remote_index_url = format!("{}/api/v1/{}/index.json", server_url, config.project);
+    let remote_index_url = format!("{}/api/v1/{}/index", server_url, config.project);
 
     println!("-> Fetching remote metadata from {}...", remote_index_url);
     let resp = client
         .get(&remote_index_url)
         .send()
         .await
-        .map_err(|e| format!("Failed to fetch remote index.json: {}", e))?;
+        .map_err(|e| format!("Failed to fetch remote index: {}", e))?;
 
     if !resp.status().is_success() {
         return Err(format!(
-            "Failed to fetch remote index.json: Server responded with status {}",
+            "Failed to fetch remote index: Server responded with status {}",
             resp.status()
         )
         .into());
@@ -32,7 +32,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let remote_index_content = resp.text().await?;
     let remote_index: IndexFile = serde_json::from_str(&remote_index_content)
-        .map_err(|e| format!("Failed to parse remote index.json: {}", e))?;
+        .map_err(|e| format!("Failed to parse remote index: {}", e))?;
 
     // Save fetched commits into local objects directory
     for (_, commit) in remote_index.commits {

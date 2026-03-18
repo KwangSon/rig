@@ -10,34 +10,41 @@ pub async fn run(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let trimmed_url = url.trim_end_matches('/');
 
-    let (project_name, base_url) = if trimmed_url.starts_with("ssh://") {
-        // ssh://rig@localhost:2222/project_name
+    // We expect URLs like:
+    // ssh://rig@localhost:2222/username/project_name
+    // http://localhost:3000/username/project_name
+    let (project_name, username, base_url) = if trimmed_url.starts_with("ssh://") {
         let parts: Vec<&str> = trimmed_url.split('/').collect();
-        let name = parts
-            .last()
-            .ok_or("Could not determine project name from SSH URL")?;
-
-        let project = name.to_string();
+        if parts.len() < 5 {
+            return Err("Invalid SSH URL format. Expected ssh://<user>@<host>:<port>/<username>/<project>".into());
+        }
+        let project = parts.last().unwrap().to_string();
+        let username = parts[parts.len() - 2].to_string();
+        // Discard SSH specific host part, fall back to API server directly (per user instruction to use HTTP fallback)
         let api_base = "http://localhost:3000".to_string();
-        (project, api_base)
+        (project, Some(username), api_base)
     } else {
-        let name = trimmed_url
-            .rsplit('/')
-            .next()
-            .ok_or("Could not determine project name from URL")?
-            .to_string();
-
-        let base = if let Some(pos) = trimmed_url.rfind('/') {
-            trimmed_url[..pos].to_string()
-        } else {
-            return Err("Invalid URL format. Expected http://<server>/<project> or ssh://<user>@<host>:<port>/<project>".into());
-        };
-        (name, base)
+        let parts: Vec<&str> = trimmed_url.split('/').collect();
+        if parts.len() < 5 {
+            return Err("Invalid HTTP URL format. Expected http://<server>:<port>/<username>/<project>".into());
+        }
+        let project = parts.last().unwrap().to_string();
+        let username = parts[parts.len() - 2].to_string();
+        
+        let mut base = String::new();
+        // everything up to the username part is the base URL
+        for i in 0..(parts.len() - 2) {
+            base.push_str(parts[i]);
+            if i < parts.len() - 3 {
+                base.push('/');
+            }
+        }
+        (project, Some(username), base)
     };
 
     println!(
-        "Cloning project '{}' from server '{}'",
-        project_name, base_url
+        "Cloning project '{}/{}' from server '{}'",
+        username.as_deref().unwrap_or("unknown"), project_name, base_url
     );
 
     let client = reqwest::Client::new();
@@ -61,7 +68,7 @@ pub async fn run(
     println!("   Server is alive.");
 
     // 2. Fetch metadata from the server
-    let metadata_url = format!("{}/api/v1/{}/index.json", base_url, project_name);
+    let metadata_url = format!("{}/api/v1/{}/index", base_url, project_name);
     println!("-> Fetching metadata from {}...", metadata_url);
     let meta_resp = client
         .get(&metadata_url)
@@ -83,7 +90,9 @@ pub async fn run(
         serde_json::from_str(&metadata).map_err(|e| format!("Failed to parse metadata: {}", e))?;
 
     // 2.5 Resolve username (interactive only if not provided)
-    let username = if let Some(u) = provided_username {
+    let resolved_username = if let Some(u) = provided_username {
+        u.clone()
+    } else if let Some(u) = username {
         u.clone()
     } else {
         use std::io::{self, Write};
@@ -100,7 +109,7 @@ pub async fn run(
             trimmed.to_string()
         }
     };
-    index.username = Some(username.clone());
+    index.username = Some(resolved_username.clone());
 
     // 3. Create .rig folder and initialize via Repository
     let clone_path = match path {
@@ -124,7 +133,7 @@ pub async fn run(
     let config = Config {
         project: project_name.to_string(),
         server_url: Some(base_url.to_string()),
-        username: Some(username),
+        username: Some(resolved_username),
     };
     repo.write_config(&config)?;
 
@@ -166,7 +175,7 @@ pub async fn run(
     repo.write_index(&local_index)?;
 
     // 4. Create empty read-only files for each artifact
-    for (path, artifact) in &local_index.artifacts {
+    for path in local_index.artifacts.keys() {
         let file_path = clone_path.join(path);
         println!("-> Creating placeholder for {}", path);
 

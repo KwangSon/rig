@@ -1,4 +1,4 @@
-use crate::repository::{Index, Repository};
+use crate::repository::Repository;
 use flate2::read::GzDecoder;
 use protocol::IndexFile;
 use std::fs;
@@ -59,33 +59,11 @@ pub async fn run(
         .server_url
         .as_deref()
         .unwrap_or("http://localhost:3000");
-    let remote_index_url = format!("{}/api/v1/{}/index.json", server_url, config.project);
+    let remote_index_url = format!("{}/api/v1/{}/index", server_url, config.project);
     let remote_resp = client.get(&remote_index_url).send().await?;
     let remote_index: IndexFile = serde_json::from_str(&remote_resp.text().await?)?;
 
     // Resolution helpers
-    fn resolve_artifact_id(index: &IndexFile, local_index: &Index, query: &str) -> Option<String> {
-        if index.artifacts.contains_key(query) {
-            return Some(query.to_string());
-        }
-        if let Some(id) = index
-            .artifacts
-            .iter()
-            .find(|(_, details)| details.path == query)
-            .map(|(id, _)| id.clone())
-        {
-            return Some(id);
-        }
-        // Fallback to local index for resolution
-        if local_index.artifacts.contains_key(query) {
-            return Some(query.to_string());
-        }
-        local_index
-            .artifacts
-            .iter()
-            .find(|(path, _)| path == &query)
-            .map(|(path, _)| path.clone())
-    }
 
     // Determine artifacts and their target revisions
     let mut targets: Vec<(String, String, u32)> = Vec::new(); // (path, id, rev)
@@ -164,14 +142,14 @@ pub async fn run(
 
     for (path, artifact_id, rev) in targets {
         // --- Spec Check: Active local lock ---
-        if let Some(local_art) = mut_local_index.artifacts.get(&path) {
-            if local_art.locked {
-                return Err(format!(
-                    "ERROR: File '{}' is locked locally. Push or unlock before pulling.",
-                    path
-                )
-                .into());
-            }
+        if let Some(local_art) = mut_local_index.artifacts.get(&path)
+            && local_art.locked
+        {
+            return Err(format!(
+                "ERROR: File '{}' is locked locally. Push or unlock before pulling.",
+                path
+            )
+            .into());
         }
 
         let artifact_details = remote_index
