@@ -1,4 +1,4 @@
-use crate::repository::{Index, Repository};
+use crate::repository::Repository;
 use protocol::IndexFile;
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {

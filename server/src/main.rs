@@ -179,6 +179,14 @@ async fn main() {
         .route("/register", post(users::register_handler))
         .route("/login", post(users::login_handler))
         .route("/users/me", get(users::me_handler))
+        .route(
+            "/users/me/ssh-keys",
+            get(keys::get_user_keys_handler).post(keys::add_user_key_handler),
+        )
+        .route(
+            "/users/me/ssh-keys/{id}",
+            delete(keys::delete_user_key_handler),
+        )
         .route("/{project}/index.json", get(artifacts::get_index_handler))
         .route(
             "/{project}/artifacts",

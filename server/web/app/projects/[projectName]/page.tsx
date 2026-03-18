@@ -45,6 +45,7 @@ export default function ProjectPage() {
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [currentPath, setCurrentPath] = useState("");
   const [isLoadingFiles, setIsLoadingFiles] = useState(false);
+  const [hasSshKeys, setHasSshKeys] = useState<boolean | null>(null);
 
   useEffect(() => {
     const t = localStorage.getItem("token");
@@ -61,6 +62,7 @@ export default function ProjectPage() {
         .then((data) => {
           setCurrentUser(data);
           fetchProjectAndPermissions(t, data.id);
+          fetchSshKeys(t);
         })
         .catch((error) => {
           console.error("Failed to fetch current user:", error);
@@ -70,6 +72,20 @@ export default function ProjectPage() {
       fetchProjectAndPermissions(null, null); // Fetch project details even if not logged in
     }
   }, [projectName]); // Re-fetch when projectName changes
+
+  const fetchSshKeys = async (authToken: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/users/me/ssh-keys`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      if (res.ok) {
+        const keys = await res.json();
+        setHasSshKeys(keys.length > 0);
+      }
+    } catch (e) {
+      console.error("Failed to fetch SSH keys", e);
+    }
+  };
 
   const fetchProjectAndPermissions = async (
     authToken: string | null,
@@ -91,10 +107,8 @@ export default function ProjectPage() {
         return;
       }
       const projectData: Project = await projectRes.json();
-      // Use API server URL for clone command
-      const apiServerUrl = "http://localhost:3000";
-      projectData.clone_url =
-        projectData.clone_url || `${apiServerUrl}/${projectData.name}`;
+      // Use SSH for clone command
+      projectData.clone_url = `ssh://rig@localhost:2222/${projectData.name}`;
       setProject(projectData);
 
       // Fetch all users and permissions if logged in
@@ -253,6 +267,30 @@ export default function ProjectPage() {
             <h3 className="text-base leading-6 font-semibold text-gray-900">
               Clone Repository
             </h3>
+            {hasSshKeys === false && (
+              <div className="flex items-center gap-2 rounded-md bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-800 ring-1 ring-amber-600/20">
+                <svg
+                  className="h-4 w-4 text-amber-600"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                  />
+                </svg>
+                SSH Key required
+                <Link
+                  href="/settings"
+                  className="ml-1 font-bold underline hover:text-amber-900"
+                >
+                  Register now
+                </Link>
+              </div>
+            )}
           </div>
           {project.clone_url && (
             <div className="border-t border-gray-200 px-4 py-4 sm:px-6">

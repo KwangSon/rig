@@ -24,14 +24,6 @@ interface Permission {
   access: "read" | "write" | "admin";
 }
 
-interface SshKey {
-  id: string;
-  project: string;
-  title: string;
-  key_data: string;
-  created_at: string;
-}
-
 export default function ProjectSettingsPage() {
   const params = useParams<{ projectName: string }>();
   const projectName = params.projectName;
@@ -40,24 +32,16 @@ export default function ProjectSettingsPage() {
   const [project, setProject] = useState<Project | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [permissions, setPermissions] = useState<Permission[]>([]);
-  const [sshKeys, setSshKeys] = useState<SshKey[]>([]);
 
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [token, setToken] = useState("");
 
-  const [activeTab, setActiveTab] = useState<"collaborators" | "keys">(
-    "collaborators",
-  );
+  const [activeTab, setActiveTab] = useState<"collaborators">("collaborators");
 
   // State for setting new permissions
   const [permUserId, setPermUserId] = useState("");
   const [permAccess, setPermAccess] = useState("read");
-
-  // State for new SSH keys
-  const [keyTitle, setKeyTitle] = useState("");
-  const [keyData, setKeyData] = useState("");
-  const [keySubmitting, setKeySubmitting] = useState(false);
 
   useEffect(() => {
     const t = localStorage.getItem("token");
@@ -93,25 +77,20 @@ export default function ProjectSettingsPage() {
       const projectData: Project = await projectRes.json();
       setProject(projectData);
 
-      const [usersRes, permsRes, keysRes] = await Promise.all([
+      const [usersRes, permsRes] = await Promise.all([
         fetch(`${API_BASE}/users`, {
           headers: { Authorization: `Bearer ${authToken}` },
         }),
         fetch(`${API_BASE}/permissions`, {
           headers: { Authorization: `Bearer ${authToken}` },
         }),
-        fetch(`${API_BASE}/projects/${projectName}/ssh-keys`, {
-          headers: { Authorization: `Bearer ${authToken}` },
-        }),
       ]);
 
       const fetchedUsers = await usersRes.json();
       const fetchedPermissions = await permsRes.json();
-      const fetchedKeys = await keysRes.json();
 
       setUsers(fetchedUsers);
       setPermissions(fetchedPermissions);
-      setSshKeys(fetchedKeys);
 
       const userPermissions = fetchedPermissions.filter(
         (p: Permission) =>
@@ -163,64 +142,6 @@ export default function ProjectSettingsPage() {
       }
     } catch (error) {
       console.error(error);
-    }
-  };
-
-  const handlAddKey = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!token || !projectName || !keyTitle || !keyData) return;
-    setKeySubmitting(true);
-
-    try {
-      const res = await fetch(`${API_BASE}/projects/${projectName}/ssh-keys`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          title: keyTitle,
-          key_data: keyData,
-        }),
-      });
-
-      if (res.ok) {
-        const keysRes = await fetch(
-          `${API_BASE}/projects/${projectName}/ssh-keys`,
-          {
-            headers: { Authorization: `Bearer ${token}` },
-          },
-        );
-        setSshKeys(await keysRes.json());
-        setKeyTitle("");
-        setKeyData("");
-      } else {
-        alert("Failed to add SSH key. Note: Deploy keys must be unique.");
-      }
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setKeySubmitting(false);
-    }
-  };
-
-  const handleDeleteKey = async (id: string) => {
-    if (!confirm("Are you sure you want to delete this deploy key?")) return;
-
-    try {
-      const res = await fetch(
-        `${API_BASE}/projects/${projectName}/ssh-keys/${id}`,
-        {
-          method: "DELETE",
-          headers: { Authorization: `Bearer ${token}` },
-        },
-      );
-
-      if (res.ok) {
-        setSshKeys(sshKeys.filter((k) => k.id !== id));
-      }
-    } catch (e) {
-      console.error(e);
     }
   };
 
@@ -320,12 +241,6 @@ export default function ProjectSettingsPage() {
               className={`rounded-md px-3 py-2 text-left text-sm font-medium transition-colors ${activeTab === "collaborators" ? "bg-indigo-50 text-indigo-700" : "text-gray-700 hover:bg-gray-100 hover:text-gray-900"}`}
             >
               Collaborators
-            </button>
-            <button
-              onClick={() => setActiveTab("keys")}
-              className={`rounded-md px-3 py-2 text-left text-sm font-medium transition-colors ${activeTab === "keys" ? "bg-indigo-50 text-indigo-700" : "text-gray-700 hover:bg-gray-100 hover:text-gray-900"}`}
-            >
-              Deploy Keys
             </button>
           </nav>
         </div>
@@ -450,138 +365,6 @@ export default function ProjectSettingsPage() {
                   ).length === 0 && (
                     <li className="px-4 py-8 text-center text-sm text-gray-500">
                       No collaborators have been added yet
-                    </li>
-                  )}
-                </ul>
-              </div>
-            </div>
-          )}
-
-          {activeTab === "keys" && (
-            <div>
-              <div className="mb-6 border-b border-gray-200 pb-4">
-                <h2 className="text-2xl font-semibold text-gray-900">
-                  Manage Deploy Keys
-                </h2>
-                <p className="mt-1 text-sm text-gray-500">
-                  Deploy keys grant read-only access to this repository. They
-                  are primarily used for CI/CD systems.
-                </p>
-              </div>
-
-              <div className="mb-8 bg-white shadow ring-1 ring-gray-900/5 sm:rounded-lg">
-                <div className="rounded-t-lg border-b border-gray-200 bg-gray-50 px-4 py-3 sm:px-6">
-                  <h3 className="text-base font-semibold text-gray-900">
-                    Add Deploy Key
-                  </h3>
-                </div>
-                <div className="px-4 py-5 sm:p-6">
-                  <form onSubmit={handlAddKey} className="space-y-4">
-                    <div>
-                      <label className="mb-1 block text-sm font-medium text-gray-700">
-                        Title
-                      </label>
-                      <input
-                        type="text"
-                        required
-                        value={keyTitle}
-                        onChange={(e) => setKeyTitle(e.target.value)}
-                        placeholder="e.g. Jenkins Deployment Key"
-                        className="block w-full rounded-md border-0 px-3 py-1.5 text-gray-900 shadow-sm ring-1 ring-gray-300 ring-inset focus:ring-2 focus:ring-indigo-600 focus:ring-inset sm:text-sm sm:leading-6"
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-1 block text-sm font-medium text-gray-700">
-                        Key Content
-                      </label>
-                      <textarea
-                        required
-                        rows={4}
-                        value={keyData}
-                        onChange={(e) => setKeyData(e.target.value)}
-                        className="block w-full rounded-md border-0 px-3 py-1.5 font-mono text-gray-900 shadow-sm ring-1 ring-gray-300 ring-inset focus:ring-2 focus:ring-indigo-600 focus:ring-inset sm:text-sm sm:leading-6"
-                        placeholder="Begins with 'ssh-rsa', 'ecdsa-sha2-nistp256', 'ecdsa-sha2-nistp384', 'ecdsa-sha2-nistp521', 'ssh-ed25519', etc"
-                      />
-                    </div>
-                    <div className="text-sm text-gray-500">
-                      We strongly recommend using Ed25519 keys for maximum
-                      security.
-                    </div>
-                    <button
-                      type="submit"
-                      disabled={keySubmitting}
-                      className={`rounded-md px-4 py-2 text-sm font-semibold text-white shadow-sm transition-all ${keySubmitting ? "cursor-not-allowed bg-green-400" : "bg-green-600 hover:bg-green-500"}`}
-                    >
-                      {keySubmitting ? "Adding..." : "Add Key"}
-                    </button>
-                  </form>
-                </div>
-              </div>
-
-              <div className="overflow-hidden bg-white shadow ring-1 ring-gray-900/5 sm:rounded-lg">
-                <ul role="list" className="divide-y divide-gray-100">
-                  {sshKeys.map((key) => (
-                    <li
-                      key={key.id}
-                      className="flex items-center justify-between gap-x-6 px-4 py-5 hover:bg-gray-50 sm:px-6"
-                    >
-                      <div className="flex min-w-0 items-center gap-x-4">
-                        <svg
-                          className="h-6 w-6 flex-none text-gray-400"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke="currentColor"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"
-                          />
-                        </svg>
-                        <div className="min-w-0 flex-auto">
-                          <p className="text-sm leading-6 font-semibold text-gray-900">
-                            {key.title}
-                          </p>
-                          <p className="mt-1 truncate font-mono text-xs leading-5 text-gray-500">
-                            {key.key_data.substring(0, 40)}...
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-x-4">
-                        <button
-                          onClick={() => handleDeleteKey(key.id)}
-                          className="rounded-md bg-red-50 px-3 py-1 text-sm font-medium text-red-600 transition-colors hover:bg-red-100 hover:text-red-500"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </li>
-                  ))}
-
-                  {sshKeys.length === 0 && (
-                    <li className="border-t border-gray-100 px-4 py-8 text-center">
-                      <div className="mx-auto h-12 w-12 text-gray-300">
-                        <svg
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke="currentColor"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={1.5}
-                            d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"
-                          />
-                        </svg>
-                      </div>
-                      <h3 className="mt-2 text-sm font-medium text-gray-900">
-                        No Deploy Keys
-                      </h3>
-                      <p className="mt-1 text-sm text-gray-500">
-                        There are no deploy keys associated with this
-                        repository.
-                      </p>
                     </li>
                   )}
                 </ul>

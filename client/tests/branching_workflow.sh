@@ -37,7 +37,7 @@ curl -s -X POST "$API_URL/create_project" \
     -d "{\"name\":\"$PROJECT_NAME\"}" > /dev/null
 
 # Clone
-"$RIG_BIN" clone "$SERVER_URL/$PROJECT_NAME" "$PROJECT_NAME" --username "DevUser"
+"$RIG_BIN" clone "ssh://rig@localhost:2222/$PROJECT_NAME" "$PROJECT_NAME" --username "DevUser"
 cd "$PROJECT_NAME"
 
 # Commit base file

@@ -37,10 +37,11 @@ echo "Admin: admin@example.com / $ADMIN_PASSWORD"
 echo "User1: user1@example.com / $USER1_PASSWORD"
 
 # Insert Users (Using pgcrypto to hash directly in SQL)
+# Removed 'role' column as per Issue #5
 psql "$DB_URL" -c "
-INSERT INTO users (id, name, email, password_hash, role) VALUES
-('$ADMIN_USER_ID'::uuid, 'Admin', 'admin@example.com', crypt('$ADMIN_PASSWORD', gen_salt('bf')), 'admin'),
-('$REGULAR_USER_ID'::uuid, 'User1', 'user1@example.com', crypt('$USER1_PASSWORD', gen_salt('bf')), 'user')
+INSERT INTO users (id, name, email, password_hash) VALUES
+('$ADMIN_USER_ID'::uuid, 'Admin', 'admin@example.com', crypt('$ADMIN_PASSWORD', gen_salt('bf'))),
+('$REGULAR_USER_ID'::uuid, 'User1', 'user1@example.com', crypt('$USER1_PASSWORD', gen_salt('bf')))
 ON CONFLICT (email) DO NOTHING;
 " 2>/dev/null || echo "Warning: Could not insert test users"
 
@@ -52,26 +53,32 @@ find "$BASE_DIR" -mindepth 1 -maxdepth 1 -type d | while read -r project_dir; do
     
     echo "Migrating project: $project_name"
     
-    # Insert project into DB
-    psql "$DB_URL" -c "
+    # Insert project into DB and get the ID
+    project_id=$(psql "$DB_URL" -t -A -c "
     INSERT INTO projects (name, owner_id) 
     VALUES ('$project_name', '$ADMIN_USER_ID'::uuid)
-    ON CONFLICT (name) DO NOTHING;
-    " 2>/dev/null || echo "Warning: Could not insert project $project_name"
+    ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+    RETURNING id;
+    ")
     
-    # Insert admin permission for owner
+    if [ -z "$project_id" ]; then
+        echo "Warning: Could not get ID for project $project_name"
+        continue
+    fi
+    
+    # Insert admin permission for owner (using project_id UUID)
     psql "$DB_URL" -c "
-    INSERT INTO permissions (user_id, project, access) 
-    VALUES ('$ADMIN_USER_ID'::uuid, '$project_name', 'admin')
-    ON CONFLICT (user_id, project) DO NOTHING;
+    INSERT INTO permissions (user_id, project_id, access) 
+    VALUES ('$ADMIN_USER_ID'::uuid, '$project_id'::uuid, 'admin')
+    ON CONFLICT (user_id, project_id) DO NOTHING;
     " 2>/dev/null || echo "Warning: Could not insert admin permission for $project_name"
 
     # Also insert read permission for the regular user to ExampleProject specifically
     if [ "$project_name" == "ExampleProject" ]; then
         psql "$DB_URL" -c "
-        INSERT INTO permissions (user_id, project, access) 
-        VALUES ('$REGULAR_USER_ID'::uuid, 'ExampleProject', 'read')
-        ON CONFLICT (user_id, project) DO NOTHING;
+        INSERT INTO permissions (user_id, project_id, access) 
+        VALUES ('$REGULAR_USER_ID'::uuid, '$project_id'::uuid, 'read')
+        ON CONFLICT (user_id, project_id) DO NOTHING;
         " 2>/dev/null || echo "Warning: Could not insert read permission for User1 on ExampleProject"
     fi
     

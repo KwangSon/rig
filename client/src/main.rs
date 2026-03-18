@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 mod commands;
 pub mod repository;
 mod utils;
-use protocol::IndexFile;
 
 use crate::repository::{Index, Repository};
 

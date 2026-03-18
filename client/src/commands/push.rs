@@ -1,4 +1,4 @@
-use crate::repository::{Index, Repository};
+use crate::repository::Repository;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use reqwest::multipart;

@@ -9,15 +9,30 @@ pub async fn run(
     provided_username: &Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let trimmed_url = url.trim_end_matches('/');
-    let project_name = trimmed_url
-        .rsplit('/')
-        .next()
-        .ok_or("Could not determine project name from URL")?;
 
-    let base_url = if let Some(pos) = trimmed_url.rfind('/') {
-        &trimmed_url[..pos]
+    let (project_name, base_url) = if trimmed_url.starts_with("ssh://") {
+        // ssh://rig@localhost:2222/project_name
+        let parts: Vec<&str> = trimmed_url.split('/').collect();
+        let name = parts
+            .last()
+            .ok_or("Could not determine project name from SSH URL")?;
+
+        let project = name.to_string();
+        let api_base = "http://localhost:3000".to_string();
+        (project, api_base)
     } else {
-        return Err("Invalid URL format. Expected http://<server>/<project>".into());
+        let name = trimmed_url
+            .rsplit('/')
+            .next()
+            .ok_or("Could not determine project name from URL")?
+            .to_string();
+
+        let base = if let Some(pos) = trimmed_url.rfind('/') {
+            trimmed_url[..pos].to_string()
+        } else {
+            return Err("Invalid URL format. Expected http://<server>/<project> or ssh://<user>@<host>:<port>/<project>".into());
+        };
+        (name, base)
     };
 
     println!(
@@ -90,7 +105,7 @@ pub async fn run(
     // 3. Create .rig folder and initialize via Repository
     let clone_path = match path {
         Some(p) => p.clone(),
-        None => PathBuf::from(project_name),
+        None => PathBuf::from(project_name.clone()),
     };
     println!("-> Cloning into {:?}...", clone_path.display());
 

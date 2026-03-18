@@ -8,7 +8,7 @@ pub async fn run(message: &str) -> Result<(), Box<dyn std::error::Error>> {
 
     let current_dir = std::env::current_dir()?;
     let repo = Repository::open(&current_dir)?;
-    let mut local_index = repo.read_index()?;
+    let local_index = repo.read_index()?;
     let config = repo.read_config()?;
 
     let current_parent = repo.head_commit()?;
