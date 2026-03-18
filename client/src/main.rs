@@ -275,7 +275,7 @@ async fn lock_artifact(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
 
     let url = format!(
         "{}/api/v1/{}/artifacts/{}/lock",
-        server_url, config.project, artifact_id
+        server_url, config.project_key(), artifact_id
     );
     let body = serde_json::json!({"user": username}); // Note: server now uses token to get real username, but we keep this for protocol compatibility if needed
     let resp = client
@@ -285,6 +285,11 @@ async fn lock_artifact(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         .send()
         .await?;
     if !resp.status().is_success() {
+        if resp.status() == reqwest::StatusCode::CONFLICT {
+            let resp_json: serde_json::Value = resp.json().await?;
+            let locked_by = resp_json["user"].as_str().unwrap_or("another user");
+            return Err(format!("Lock denied: artifact is locked by {}", locked_by).into());
+        }
         return Err(format!("Lock request failed: {}", resp.status()).into());
     }
     let resp_json: serde_json::Value = resp.json().await?;
@@ -299,6 +304,11 @@ async fn lock_artifact(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         .find(|(_, a)| a.artifact_id == artifact_id)
         .ok_or("Artifact not found in index after lock")?;
     let current_path = current_path.clone();
+
+    // Automatically pull the latest version before making it writable
+    if let Err(e) = commands::pull::run(current_path.clone(), None, None).await {
+        println!("Warning: Failed to pull latest version during lock: {}", e);
+    }
 
     // Change local file permission to writable
     let local_path = current_dir.join(&current_path);
@@ -351,7 +361,7 @@ async fn unlock_artifact(path: &Path, force: bool) -> Result<(), Box<dyn std::er
 
     let url = format!(
         "{}/api/v1/{}/artifacts/{}/lock",
-        server_url, config.project, artifact_id
+        server_url, config.project_key(), artifact_id
     );
     let body = serde_json::json!({
         "user": username,

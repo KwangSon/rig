@@ -66,7 +66,7 @@ pub async fn run(
         Err(e) => return Err(format!("Authentication failed: {}", e).into()),
     };
 
-    let remote_index_url = format!("{}/api/v1/{}/index", server_url, config.project);
+    let remote_index_url = format!("{}/api/v1/{}/index", server_url, config.project_key());
     let remote_resp = client
         .get(&remote_index_url)
         .header("authorization", format!("Bearer {}", token))
@@ -156,9 +156,10 @@ pub async fn run(
         if requested_rev.is_none() && requested_commit.is_none() && out_arg.is_none() {
             if let Some(local_art) = mut_local_index.artifacts.get(path)
                 && local_art.locked
+                && local_art.lock_owner == config.username
             {
                 return Err(format!(
-                    "ERROR: File '{}' is locked locally. Push or unlock before pulling.",
+                    "ERROR: File '{}' is locked by you. Push or unlock before pulling to avoid losing local changes.",
                     path
                 )
                 .into());
@@ -192,7 +193,7 @@ pub async fn run(
         let remote_filename = format!("rev{}{}", rev, ext);
         let download_url = format!(
             "{}/api/v1/{}/artifacts/{}/{}",
-            server_url, config.project, artifact_id, remote_filename
+            server_url, config.project_key(), artifact_id, remote_filename
         );
 
         let mut file_content = client

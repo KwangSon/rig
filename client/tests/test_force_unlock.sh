@@ -3,7 +3,7 @@ set -e
 
 # Setup paths
 ROOT_DIR="$(pwd)"
-RIG_BIN="$ROOT_DIR/target/debug/client"
+RIG_BIN="$ROOT_DIR/target/debug/rig"
 PROJECT_NAME="test_force_unlock_project_$(date +%s)"
 CLONE_DIR_1="clone_user_1"
 CLONE_DIR_2="clone_admin"
@@ -59,19 +59,24 @@ LOGIN_RESP=$(curl -s -X POST "$API_URL/login" \
 
 AUTH_TOKEN=$(echo $LOGIN_RESP | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
 
-if [ -z "$AUTH_TOKEN" ]; then
-    echo "Error: Failed to login and get auth token."
-    echo "Response: $LOGIN_RESP"
-    exit 1
-fi
+# Login for User 1
+echo "-> Logging in as user1..."
+USER1_LOGIN_RESP=$(curl -s -X POST "$API_URL/login" \
+    -H "Content-Type: application/json" \
+    -d "{\"email\":\"$USER1_EMAIL\", \"password\":\"$USER1_PASSWORD\"}")
 
-# Inject token for rig client
-mkdir -p ~/.config/rig
-echo "{\"host_tokens\":{\"$SERVER_URL\":\"$AUTH_TOKEN\"}}" > ~/.config/rig/credentials
-chmod 600 ~/.config/rig/credentials
+USER1_AUTH_TOKEN=$(echo $USER1_LOGIN_RESP | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+
+function set_token {
+    local token=$1
+    mkdir -p ~/.config/rig
+    echo "{\"host_tokens\":{\"$SERVER_URL\":\"$token\"}}" > ~/.config/rig/credentials
+    chmod 600 ~/.config/rig/credentials
+}
 
 # 1. Create project via API (Admin is the owner)
 echo "-> Creating project '$PROJECT_NAME' via API..."
+set_token "$AUTH_TOKEN"
 CREATE_RESP=$(curl -s -X POST "$API_URL/create_project" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer $AUTH_TOKEN" \
@@ -86,14 +91,14 @@ fi
 # 2. Clone for User 1 (Regular User) and Admin
 cd "$ROOT_DIR"
 echo -e "\n--- 2. Cloning for User 1 and Admin ---"
-# Note: For multi-user testing in scripts, we might need to swap tokens.
-# But for now, we'll use Admin token for both clones or assume Admin token has permission.
-# In this specific test, we'll swap to User1 token for User1's actions later if needed.
+set_token "$USER1_AUTH_TOKEN"
 "$RIG_BIN" clone "$SERVER_URL/admin/$PROJECT_NAME" "$CLONE_DIR_1" --username "User1"
+set_token "$AUTH_TOKEN"
 "$RIG_BIN" clone "$SERVER_URL/admin/$PROJECT_NAME" "$CLONE_DIR_2" --username "Admin"
 
 # 3. Add initial file as Admin and Push
 cd "$ROOT_DIR/$CLONE_DIR_2"
+set_token "$AUTH_TOKEN"
 echo "Initial content" > file.txt
 "$RIG_BIN" add file.txt
 "$RIG_BIN" commit -m "Initial commit"
@@ -102,12 +107,14 @@ echo "Initial content" > file.txt
 # 4. User 1 pulls and locks the file
 cd "$ROOT_DIR/$CLONE_DIR_1"
 echo -e "\n--- 3. User 1 pulling and locking file ---"
+set_token "$USER1_AUTH_TOKEN"
 "$RIG_BIN" pull file.txt
 "$RIG_BIN" lock file.txt
 
 # 5. Admin tries to unlock it without force (should fail because it's locked by User1)
 cd "$ROOT_DIR/$CLONE_DIR_2"
 echo -e "\n--- 4. Admin trying to unlock User 1's file (should fail without --force) ---"
+set_token "$AUTH_TOKEN"
 if "$RIG_BIN" unlock file.txt; then
     echo "Error: Admin should NOT be able to unlock User 1's file without --force"
     exit 1

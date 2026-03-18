@@ -319,10 +319,24 @@ pub async fn login_handler(
     Ok(Json(AuthResponse { token, user }))
 }
 
-pub async fn me_handler(
+#[derive(Serialize, Deserialize)]
+pub struct TokenInfo {
+    pub id: Uuid,
+    pub token_text: String,
+    pub name: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub last_used_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Deserialize)]
+pub struct CreateTokenRequest {
+    pub name: String,
+}
+
+pub async fn list_tokens_handler(
     headers: HeaderMap,
     State(db): State<PgPool>,
-) -> Result<Json<User>, StatusCode> {
+) -> Result<Json<Vec<TokenInfo>>, StatusCode> {
     let auth_header = headers
         .get("authorization")
         .and_then(|h| h.to_str().ok())
@@ -331,5 +345,69 @@ pub async fn me_handler(
 
     let user = authenticate_token(&db, auth_header).await?;
 
-    Ok(Json(user))
+    let tokens = sqlx::query_as!(
+        TokenInfo,
+        "SELECT id, token_text, name, created_at, last_used_at FROM tokens WHERE user_id = $1 ORDER BY created_at DESC",
+        user.id
+    )
+    .fetch_all(&db)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(tokens))
+}
+
+pub async fn create_token_handler(
+    headers: HeaderMap,
+    State(db): State<PgPool>,
+    Json(payload): Json<CreateTokenRequest>,
+) -> Result<(StatusCode, Json<TokenInfo>), StatusCode> {
+    let auth_header = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    let user = authenticate_token(&db, auth_header).await?;
+
+    // Generate a random token
+    let token_text = format!("rigp_{}", Uuid::new_v4().to_string().replace("-", ""));
+
+    let token = sqlx::query_as!(
+        TokenInfo,
+        "INSERT INTO tokens (user_id, token_text, name) VALUES ($1, $2, $3) RETURNING id, token_text, name, created_at, last_used_at",
+        user.id,
+        token_text,
+        payload.name
+    )
+    .fetch_one(&db)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok((StatusCode::CREATED, Json(token)))
+}
+
+pub async fn delete_token_handler(
+    headers: HeaderMap,
+    Path(token_id): Path<Uuid>,
+    State(db): State<PgPool>,
+) -> Result<StatusCode, StatusCode> {
+    let auth_header = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    let user = authenticate_token(&db, auth_header).await?;
+
+    let result = sqlx::query!("DELETE FROM tokens WHERE id = $1 AND user_id = $2", token_id, user.id)
+        .execute(&db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if result.rows_affected() == 0 {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    Ok(StatusCode::NO_CONTENT)
 }

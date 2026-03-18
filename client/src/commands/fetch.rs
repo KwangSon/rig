@@ -14,7 +14,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .server_url
         .as_deref()
         .unwrap_or("http://localhost:3000");
-    let remote_index_url = format!("{}/api/v1/{}/index", server_url, config.project);
+    let remote_index_url = format!("{}/api/v1/{}/index", server_url, config.project_key());
 
     let token = match ensure_authenticated(server_url).await {
         Ok(t) => t,

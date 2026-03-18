@@ -179,7 +179,7 @@ pub async fn run(_message_opt: Option<String>) -> Result<(), Box<dyn std::error:
     }
 
     // 3. Send PushRequest to server
-    let push_url = format!("{}/api/v1/{}/push", server_url, config.project);
+    let push_url = format!("{}/api/v1/{}/push", server_url, config.project_key());
     println!("-> Sending push request (multipart) to server...");
 
     let resp = client
@@ -202,7 +202,7 @@ pub async fn run(_message_opt: Option<String>) -> Result<(), Box<dyn std::error:
     );
 
     // 4. Synchronize local state
-    let remote_index_url = format!("{}/api/v1/{}/index", server_url, config.project);
+    let remote_index_url = format!("{}/api/v1/{}/index", server_url, config.project_key());
     let remote_resp = client
         .get(&remote_index_url)
         .header("authorization", format!("Bearer {}", token))
@@ -213,16 +213,21 @@ pub async fn run(_message_opt: Option<String>) -> Result<(), Box<dyn std::error:
 
         // Transform remote artifacts to new local index structure
         let mut new_artifacts = std::collections::HashMap::new();
+        let current_username = config.username.as_deref().unwrap_or("unknown");
+
         for (id, remote_art) in remote_index.artifacts {
             let path = remote_art.path.clone();
 
-            // Try to preserve some local state if it existed
-            let (local_state, locked, lock_owner) =
-                if let Some(la) = local_index.artifacts.get(&path) {
-                    (la.local_state.clone(), la.locked, la.lock_owner.clone())
-                } else {
-                    ("placeholder".to_string(), false, None)
-                };
+            // Sync lock state from server
+            let locked = remote_art.locked_by.is_some();
+            let lock_owner = remote_art.locked_by.clone();
+
+            // Preserve local_state (placeholder vs ready)
+            let local_state = if let Some(la) = local_index.artifacts.get(&path) {
+                la.local_state.clone()
+            } else {
+                "placeholder".to_string()
+            };
 
             new_artifacts.insert(
                 path,

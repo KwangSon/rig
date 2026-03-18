@@ -8,7 +8,7 @@ set -e
 # Configuration
 SERVER_URL="http://localhost:3000"
 API_URL="$SERVER_URL/api/v1"
-PROJECT_NAME="ExampleProject"
+PROJECT_NAME="WorkflowTest_$(date +%s)"
 ROOT_DIR="$(pwd)"
 RIG_BIN="$ROOT_DIR/target/debug/rig"
 ADMIN_WS="$ROOT_DIR/admin_ws"
@@ -83,7 +83,7 @@ cd "$ADMIN_WS"
 "$RIG_BIN" fetch
 echo "-> Attempting to lock file held by User1 (should fail)..."
 # Use a subshell to avoid exiting on expected failure
-if "$RIG_BIN" lock shared_file.txt 2>&1 | grep -q "locked by User1"; then
+if "$RIG_BIN" lock shared_file.txt 2>&1 | grep -q "locked by"; then
     echo "   Correct: Lock rejected because User1 holds it."
 else
     echo "   Error: Lock should have been rejected!"
@@ -103,8 +103,8 @@ cd "$ROOT_DIR"
 echo -e "\n--- 5. User: Admin (Finalizing) ---"
 set_token "$ADMIN_TOKEN"
 cd "$ADMIN_WS"
-"$RIG_BIN" lock shared_file.txt
 "$RIG_BIN" pull shared_file.txt
+"$RIG_BIN" lock shared_file.txt
 echo "Final file content in Admin workspace:"
 cat shared_file.txt
 

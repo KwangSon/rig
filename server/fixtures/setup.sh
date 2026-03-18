@@ -52,21 +52,34 @@ echo "Migrating existing filesystem projects to database..."
 
 # Find all project directories
 find "$BASE_DIR" -mindepth 1 -maxdepth 1 -type d | while read -r project_dir; do
-    project_name=$(basename "$project_dir")
+    project_name=""
+    if [ -f "$project_dir/index" ]; then
+        project_name=$(grep -Eo '"project": *"[^"]+"' "$project_dir/index" | head -1 | awk -F '"' '{print $4}')
+    fi
+    if [ -z "$project_name" ]; then
+        project_name=$(basename "$project_dir")
+    fi
     
-    echo "Migrating project: $project_name"
+    echo "Migrating project: $project_name (from $project_dir)"
     
     # Insert project into DB and get the ID
     project_id=$(psql "$DB_URL" -t -A -c "
     INSERT INTO projects (name, owner_id) 
     VALUES ('$project_name', '$ADMIN_USER_ID'::uuid)
-    ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+    ON CONFLICT (owner_id, name) DO UPDATE SET name = EXCLUDED.name
     RETURNING id;
     " | head -n 1)
     
     if [ -z "$project_id" ]; then
         echo "Warning: Could not get ID for project $project_name"
         continue
+    fi
+    
+    # Rename the directory to the generated UUID
+    if [ "$project_name" != "$project_id" ]; then
+        new_dir="$BASE_DIR/$project_id"
+        echo "-> Renaming directory $project_name to $project_id"
+        mv "$project_dir" "$new_dir"
     fi
     
     # Insert admin permission for owner (using project_id UUID)

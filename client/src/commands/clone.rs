@@ -60,8 +60,32 @@ pub async fn run(
         Err(e) => return Err(format!("Authentication failed: {}", e).into()),
     };
 
+    // 2.5 Resolve Project UUID
+    let resolve_url = format!("{}/api/v1/projects/resolve?owner={}&name={}", base_url, username, project_name);
+    println!("-> Resolving project UUID...");
+    let resolve_resp = client
+        .get(&resolve_url)
+        .header("authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to resolve project: {}", e))?;
+
+    if !resolve_resp.status().is_success() {
+        return Err(format!(
+            "Failed to resolve project '{}/{}': Server responded with status {}",
+            username, project_name, resolve_resp.status()
+        )
+        .into());
+    }
+    
+    let resolve_data: serde_json::Value = resolve_resp.json().await?;
+    let project_id = resolve_data["id"]
+        .as_str()
+        .ok_or("Invalid response format: missing 'id' field in resolve response")?
+        .to_string();
+
     // 3. Fetch metadata from the server
-    let metadata_url = format!("{}/api/v1/{}/index", base_url, project_name);
+    let metadata_url = format!("{}/api/v1/{}/index", base_url, project_id);
     println!("-> Fetching metadata from {}...", metadata_url);
     let meta_resp = client
         .get(&metadata_url)
@@ -126,6 +150,7 @@ pub async fn run(
     // 3.1 Write config
     let config = Config {
         project: project_name.to_string(),
+        project_id: Some(project_id),
         server_url: Some(base_url.to_string()),
         username: Some(resolved_username),
     };

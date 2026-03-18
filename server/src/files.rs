@@ -1,3 +1,4 @@
+use uuid::Uuid;
 use crate::CombinedState;
 use axum::{
     extract::{Path, Query, State},
@@ -24,7 +25,7 @@ pub struct FileEntry {
 use axum::http::HeaderMap;
 
 pub async fn list_files_handler(
-    Path(project): Path<String>,
+    Path(project): Path<Uuid>,
     headers: HeaderMap,
     Query(query): Query<FileListQuery>,
     State(combined): State<CombinedState>,

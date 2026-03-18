@@ -3,7 +3,7 @@ set -e
 
 # Setup paths
 ROOT_DIR="$(pwd)"
-RIG_BIN="$ROOT_DIR/target/debug/client"
+RIG_BIN="$ROOT_DIR/target/debug/rig"
 PROJECT_NAME="test_pull_rev_$(date +%s)"
 CLONE_DIR="clone_test_rev"
 SERVER_URL="http://localhost:3000"

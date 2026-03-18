@@ -3,7 +3,7 @@ set -e
 
 # Setup paths
 ROOT_DIR="$(pwd)"
-RIG_BIN="$ROOT_DIR/target/debug/client"
+RIG_BIN="$ROOT_DIR/target/debug/rig"
 PROJECT_NAME="test_permissions_project_$(date +%s)"
 CLONE_DIR_1="clone_user_1"
 CLONE_DIR_2="clone_user_2"

@@ -67,7 +67,7 @@ pub struct LockResponse {
 
 // --- Application State ---
 
-pub type SharedState = Arc<Mutex<HashMap<String, AppState>>>;
+pub type SharedState = Arc<Mutex<HashMap<Uuid, AppState>>>;
 
 #[derive(Clone)]
 pub struct CombinedState {
@@ -116,20 +116,20 @@ async fn main() {
     // run_migrations(&db).await.expect("Failed to run migrations");
 
     // Collect all projects from DB and load their state if directory exists
-    let mut projects: HashMap<String, AppState> = HashMap::new();
-    let project_names = sqlx::query("SELECT name FROM projects")
+    let mut projects: HashMap<Uuid, AppState> = HashMap::new();
+    let project_records = sqlx::query("SELECT id FROM projects")
         .fetch_all(&db)
         .await
         .unwrap_or_default()
         .into_iter()
-        .map(|row| row.get::<String, _>("name"))
-        .collect::<Vec<String>>();
-    for name in project_names {
-        let project_dir = base_dir.join(&name);
+        .map(|row| row.get::<Uuid, _>("id"))
+        .collect::<Vec<Uuid>>();
+    for id in project_records {
+        let project_dir = base_dir.join(&id.to_string());
         if project_dir.exists()
             && let Ok(app_state) = load_project_state(&project_dir)
         {
-            projects.insert(name, app_state);
+            projects.insert(id, app_state);
         }
     }
 
@@ -155,6 +155,7 @@ async fn main() {
     let api_routes = Router::new()
         .route("/health", get(health_handler))
         .route("/projects", get(get_projects_handler))
+        .route("/projects/resolve", get(resolve_project_handler))
         .route(
             "/projects/{name}",
             get(get_project_handler).delete(delete_project_handler),
@@ -308,6 +309,36 @@ async fn get_projects_handler(
     Json(projects)
 }
 
+#[derive(Deserialize)]
+struct ResolveProjectQuery {
+    owner: String,
+    name: String,
+}
+
+#[derive(Serialize)]
+struct ResolveProjectResponse {
+    id: Uuid,
+}
+
+// GET /projects/resolve?owner=xyz&name=abc
+async fn resolve_project_handler(
+    State(combined): State<CombinedState>,
+    axum::extract::Query(query): axum::extract::Query<ResolveProjectQuery>,
+) -> Result<Json<ResolveProjectResponse>, StatusCode> {
+    let project_id = sqlx::query(
+        "SELECT p.id FROM projects p JOIN users u ON p.owner_id = u.id WHERE LOWER(u.name) = LOWER($1) AND LOWER(p.name) = LOWER($2)"
+    )
+    .bind(&query.owner)
+    .bind(&query.name)
+    .fetch_optional(&combined.db)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .map(|row| row.get::<Uuid, _>("id"))
+    .ok_or(StatusCode::NOT_FOUND)?;
+
+    Ok(Json(ResolveProjectResponse { id: project_id }))
+}
+
 // POST /create_project
 async fn create_project_handler(
     State(combined): State<CombinedState>,
@@ -341,16 +372,17 @@ async fn create_project_handler(
         }
     };
 
-    // Check if project exists in DB
-    let existing = sqlx::query("SELECT id FROM projects WHERE name = $1")
+    // Check if project exists in DB for this owner
+    let existing = sqlx::query("SELECT id FROM projects WHERE name = $1 AND owner_id = $2")
         .bind(&payload.name)
+        .bind(user.id)
         .fetch_optional(&combined.db)
         .await;
     if existing.map(|opt| opt.is_some()).unwrap_or(false) {
         return (
             StatusCode::CONFLICT,
             Json(CreateProjectResponse {
-                message: "Project already exists".to_string(),
+                message: "Project with this name already exists for this user".to_string(),
             }),
         );
     }
@@ -390,8 +422,8 @@ async fn create_project_handler(
         );
     }
 
-    // Create project directory
-    let project_dir = combined.base_dir.join(&payload.name);
+    // Create project directory using UUID
+    let project_dir = combined.base_dir.join(&project_id.to_string());
     if fs::create_dir_all(&project_dir).is_err() {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -428,7 +460,7 @@ async fn create_project_handler(
     match load_project_state(&project_dir) {
         Ok(app_state) => {
             let mut projects = combined.projects.lock().await;
-            projects.insert(payload.name, app_state);
+            projects.insert(project_id, app_state);
             (
                 StatusCode::CREATED,
                 Json(CreateProjectResponse {
@@ -445,31 +477,32 @@ async fn create_project_handler(
     }
 }
 
-// GET /projects/{name}
+// GET /projects/{id}
 async fn get_project_handler(
     State(combined): State<CombinedState>,
-    Path(name): Path<String>,
+    Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let project = sqlx::query(
-        "SELECT p.name, p.owner_id, u.name as owner_name FROM projects p JOIN users u ON p.owner_id = u.id WHERE p.name = $1"
+        "SELECT p.name, p.owner_id, u.name as owner_name FROM projects p JOIN users u ON p.owner_id = u.id WHERE p.id = $1"
     )
-        .bind(&name)
+        .bind(&id)
         .fetch_optional(&combined.db)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
 
     Ok(Json(serde_json::json!({
+        "id": id,
         "name": project.get::<String, _>("name"),
         "owner_id": project.get::<Uuid, _>("owner_id"),
         "owner_name": project.get::<String, _>("owner_name")
     })))
 }
 
-// DELETE /projects/{name}
+// DELETE /projects/{id}
 async fn delete_project_handler(
     State(combined): State<CombinedState>,
-    Path(name): Path<String>,
+    Path(id): Path<Uuid>,
     headers: HeaderMap,
 ) -> StatusCode {
     // Authenticate user
@@ -486,8 +519,8 @@ async fn delete_project_handler(
     };
 
     // Check if user is owner or global admin
-    let project_owner = sqlx::query("SELECT owner_id FROM projects WHERE name = $1")
-        .bind(&name)
+    let project_owner = sqlx::query("SELECT owner_id FROM projects WHERE id = $1")
+        .bind(&id)
         .fetch_optional(&combined.db)
         .await
         .unwrap_or(None);
@@ -508,9 +541,9 @@ async fn delete_project_handler(
         return StatusCode::FORBIDDEN;
     }
 
-    // Delete from DB (cascade permissions)
-    if sqlx::query("DELETE FROM projects WHERE name = $1")
-        .bind(&name)
+    // Delete from DB
+    if sqlx::query("DELETE FROM projects WHERE id = $1")
+        .bind(&id)
         .execute(&combined.db)
         .await
         .is_err()
@@ -518,15 +551,16 @@ async fn delete_project_handler(
         return StatusCode::INTERNAL_SERVER_ERROR;
     }
 
-    // Delete filesystem directory
-    let project_dir = PathBuf::from("server/examples").join(&name);
+    // Attempt to remove directory
+    let project_dir = combined.base_dir.join(&id.to_string());
     if fs::remove_dir_all(&project_dir).is_err() {
-        // Log error but don't fail
+        // We removed it from the DB, so we return success even if FS cleanup fails.
+        // In a real system, you might flag this for manual cleanup.
     }
 
     // Remove from in-memory state
     let mut projects = combined.projects.lock().await;
-    projects.remove(&name);
+    projects.remove(&id);
 
     StatusCode::NO_CONTENT
 }

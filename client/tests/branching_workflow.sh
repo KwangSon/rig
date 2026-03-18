@@ -3,7 +3,7 @@ set -e
 
 # Setup paths
 ROOT_DIR="$(pwd)"
-RIG_BIN="$ROOT_DIR/target/debug/client"
+RIG_BIN="$ROOT_DIR/target/debug/rig"
 PROJECT_NAME="branching_test_$(date +%s)"
 SERVER_URL="http://localhost:3000"
 API_URL="$SERVER_URL/api/v1"

@@ -7,8 +7,17 @@ use std::path::{Path, PathBuf};
 #[derive(Serialize, Deserialize, Default, Debug, Clone)]
 pub struct Config {
     pub project: String,
+    pub project_id: Option<String>,
     pub server_url: Option<String>,
     pub username: Option<String>,
+}
+
+impl Config {
+    /// Returns the project identifier for API URLs.
+    /// Uses the UUID-based `project_id` if available, otherwise falls back to the project name.
+    pub fn project_key(&self) -> &str {
+        self.project_id.as_deref().unwrap_or(&self.project)
+    }
 }
 
 pub struct Repository {

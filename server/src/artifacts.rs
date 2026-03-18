@@ -66,7 +66,7 @@ fn get_rev_filename(id: &str, rev: u32) -> String {
 }
 
 pub async fn create_artifact_handler(
-    Path(project): Path<String>,
+    Path(project): Path<Uuid>,
     headers: HeaderMap,
     State(combined): State<CombinedState>,
     Json(payload): Json<CreateArtifactRequest>,
@@ -166,7 +166,7 @@ pub async fn create_artifact_handler(
 }
 
 pub async fn get_artifacts_handler(
-    Path(project): Path<String>,
+    Path(project): Path<Uuid>,
     State(state): State<SharedState>,
 ) -> Json<Vec<ArtifactShortResponse>> {
     let projects = state.lock().await;
@@ -187,7 +187,7 @@ pub async fn get_artifacts_handler(
 }
 
 pub async fn get_artifact_info_handler(
-    Path((project, id)): Path<(String, String)>,
+    Path((project, id)): Path<(Uuid, String)>,
     State(state): State<SharedState>,
 ) -> Json<ArtifactInfoResponse> {
     let projects = state.lock().await;
@@ -209,7 +209,7 @@ pub async fn get_artifact_info_handler(
 }
 
 pub async fn create_revision_handler(
-    Path((project, id)): Path<(String, String)>,
+    Path((project, id)): Path<(Uuid, String)>,
     headers: HeaderMap,
     State(combined): State<CombinedState>,
     Json(payload): Json<CreateRevisionRequest>,
@@ -301,7 +301,7 @@ pub async fn create_revision_handler(
 }
 
 pub async fn get_revisions_handler(
-    Path((project, id)): Path<(String, String)>,
+    Path((project, id)): Path<(Uuid, String)>,
     State(state): State<SharedState>,
 ) -> Json<Vec<RevisionShortResponse>> {
     let projects = state.lock().await;
@@ -321,7 +321,7 @@ pub async fn get_revisions_handler(
 }
 
 pub async fn lock_handler(
-    Path((project, id)): Path<(String, String)>,
+    Path((project, id)): Path<(Uuid, String)>,
     headers: HeaderMap,
     State(combined): State<CombinedState>,
     Json(payload): Json<LockRequest>,
@@ -424,7 +424,7 @@ pub async fn lock_handler(
 }
 
 pub async fn unlock_handler(
-    Path((project, id)): Path<(String, String)>,
+    Path((project, id)): Path<(Uuid, String)>,
     headers: HeaderMap,
     State(combined): State<CombinedState>,
     Json(payload): Json<UnlockRequest>,
@@ -562,7 +562,7 @@ pub async fn unlock_handler(
 }
 
 pub async fn get_lock_handler(
-    Path((project, id)): Path<(String, String)>,
+    Path((project, id)): Path<(Uuid, String)>,
     State(state): State<SharedState>,
 ) -> Json<LockResponse> {
     let projects = state.lock().await;
@@ -582,7 +582,7 @@ pub async fn get_lock_handler(
 }
 
 pub async fn get_index_handler(
-    Path(project): Path<String>,
+    Path(project): Path<Uuid>,
     State(state): State<SharedState>,
 ) -> (StatusCode, Json<serde_json::Value>) {
     let projects = state.lock().await;
@@ -604,7 +604,7 @@ pub async fn get_index_handler(
 }
 
 pub async fn update_gitmodule_handler(
-    Path((project, path)): Path<(String, String)>,
+    Path((project, path)): Path<(Uuid, String)>,
     headers: HeaderMap,
     State(combined): State<CombinedState>,
     Json(payload): Json<protocol::GitModule>,
@@ -650,6 +650,10 @@ fn persist_index(app_state: &AppState) -> Result<(), String> {
     let mut artifacts_map = serde_json::Map::new();
     for (id, artifact) in &app_state.artifacts {
         let mut artifact_obj = serde_json::Map::new();
+        artifact_obj.insert(
+            "id".to_string(),
+            serde_json::Value::String(artifact.id.clone()),
+        );
         artifact_obj.insert(
             "path".to_string(),
             serde_json::Value::String(artifact.path.clone()),
@@ -740,7 +744,7 @@ pub struct PushMetadata {
 }
 
 pub async fn push_handler(
-    Path(project): Path<String>,
+    Path(project): Path<Uuid>,
     headers: HeaderMap,
     State(combined): State<CombinedState>,
     mut multipart: Multipart,
@@ -931,10 +935,23 @@ pub async fn push_handler(
         .unwrap_or_else(|| "refs/heads/main".to_string());
     server_refs.insert(ref_name, new_hash.clone());
 
+    // Try to preserve server_url and project name from existing index
+    let mut current_server_url = None;
+    let mut current_project_name = project.to_string(); // fallback
+
+    if let Ok(index_content) = fs::read_to_string(&index_path)
+        && let Ok(index_val) = serde_json::from_str::<serde_json::Value>(&index_content)
+    {
+        current_server_url = index_val["server_url"].as_str().map(|s| s.to_string());
+        if let Some(p) = index_val["project"].as_str() {
+            current_project_name = p.to_string();
+        }
+    }
+
     // Update index
     let mut full_index: protocol::IndexFile = protocol::IndexFile {
-        project: project.clone(),
-        server_url: None,
+        project: current_project_name,
+        server_url: current_server_url,
         username: None,
         latest_commit: new_hash.clone(), // Legacy compatibility
         refs: server_refs,
@@ -942,13 +959,6 @@ pub async fn push_handler(
         git_modules: app_state.git_modules.clone(),
         commits: commits_map,
     };
-
-    // Try to preserve server_url from existing index
-    if let Ok(index_content) = fs::read_to_string(&index_path)
-        && let Ok(index_val) = serde_json::from_str::<serde_json::Value>(&index_content)
-    {
-        full_index.server_url = index_val["server_url"].as_str().map(|s| s.to_string());
-    }
 
     let _ = fs::write(
         &index_path,
@@ -961,7 +971,7 @@ pub async fn push_handler(
     )
 }
 pub async fn download_artifact_handler(
-    Path((project, id, filename)): Path<(String, String, String)>,
+    Path((project, id, filename)): Path<(Uuid, String, String)>,
     State(state): State<SharedState>,
 ) -> (StatusCode, Vec<u8>) {
     let projects = state.lock().await;

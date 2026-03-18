@@ -308,12 +308,12 @@ This warning is also shown at the start of `rig lock` and `rig checkout` if unpu
 
 ## Server-Side Storage Structure
 
-On the server, data is partitioned and isolated by `project_id`. This multi-tenant design ensures that all files and metadata are strictly scoped to their respective projects. 
+On the server, data is partitioned and isolated by `project_id` (a unique UUID). This multi-tenant design ensures that all files and metadata are strictly scoped to their respective projects and completely eliminates directory name collisions. 
 
 The internal storage layout for a specific project looks like this:
 
 ```text
-[project_id]/
+[project_uuid]/
  ├── .rig/         # Core metadata, configuration, index, and commit history
  └── artifacts/    # The physical object store for actual file data, strictly keyed by artifact ID
       ├── [artifact_id_1]/
@@ -361,9 +361,6 @@ Stores long-lived API tokens for CLI and tool access.
 - `name` (Text)
 - `created_at` (Timestamp)
 - `last_used_at` (Timestamp)
-
-### `file_locks`
-...
 
 ### `file_locks`
 Tracks explicit, granular file locks to prevent concurrent modifications on individual artifacts. Locks are tied to the immutable `artifact_id` rather than a mutable string path, ensuring locks remain valid even if the file is moved or renamed locally via `rig mv`. Furthermore, locks are **branch-isolated**, meaning a lock is granted for a specific artifact *on a specific branch*.

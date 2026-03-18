@@ -58,7 +58,7 @@ pub async fn run(subcommand: &GitModuleCommands) -> Result<(), Box<dyn std::erro
 
             let api_url = format!(
                 "{}/api/v1/{}/gitmodules/{}",
-                server_url, config.project, path_str
+                server_url, config.project_key(), path_str
             );
 
             let resp = client
@@ -101,7 +101,7 @@ pub async fn run(subcommand: &GitModuleCommands) -> Result<(), Box<dyn std::erro
 
             let api_url = format!(
                 "{}/api/v1/{}/gitmodules/{}",
-                server_url, config.project, path_str
+                server_url, config.project_key(), path_str
             );
 
             let resp = client
