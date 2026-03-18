@@ -400,10 +400,14 @@ pub async fn delete_token_handler(
 
     let user = authenticate_token(&db, auth_header).await?;
 
-    let result = sqlx::query!("DELETE FROM tokens WHERE id = $1 AND user_id = $2", token_id, user.id)
-        .execute(&db)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let result = sqlx::query!(
+        "DELETE FROM tokens WHERE id = $1 AND user_id = $2",
+        token_id,
+        user.id
+    )
+    .execute(&db)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     if result.rows_affected() == 0 {
         return Err(StatusCode::NOT_FOUND);

@@ -176,6 +176,11 @@ async fn main() {
         .route("/auth/session", post(auth::create_session_handler))
         .route("/auth/token", get(auth::poll_session_handler))
         .route("/users/me", get(users::me_handler))
+        .route(
+            "/users/me/tokens",
+            get(users::list_tokens_handler).post(users::create_token_handler),
+        )
+        .route("/users/me/tokens/{id}", delete(users::delete_token_handler))
         .route("/{project}/index", get(artifacts::get_index_handler))
         .route(
             "/{project}/artifacts",

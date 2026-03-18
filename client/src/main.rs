@@ -275,7 +275,9 @@ async fn lock_artifact(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
 
     let url = format!(
         "{}/api/v1/{}/artifacts/{}/lock",
-        server_url, config.project_key(), artifact_id
+        server_url,
+        config.project_key(),
+        artifact_id
     );
     let body = serde_json::json!({"user": username}); // Note: server now uses token to get real username, but we keep this for protocol compatibility if needed
     let resp = client
@@ -361,7 +363,9 @@ async fn unlock_artifact(path: &Path, force: bool) -> Result<(), Box<dyn std::er
 
     let url = format!(
         "{}/api/v1/{}/artifacts/{}/lock",
-        server_url, config.project_key(), artifact_id
+        server_url,
+        config.project_key(),
+        artifact_id
     );
     let body = serde_json::json!({
         "user": username,

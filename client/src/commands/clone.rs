@@ -61,7 +61,10 @@ pub async fn run(
     };
 
     // 2.5 Resolve Project UUID
-    let resolve_url = format!("{}/api/v1/projects/resolve?owner={}&name={}", base_url, username, project_name);
+    let resolve_url = format!(
+        "{}/api/v1/projects/resolve?owner={}&name={}",
+        base_url, username, project_name
+    );
     println!("-> Resolving project UUID...");
     let resolve_resp = client
         .get(&resolve_url)
@@ -73,11 +76,13 @@ pub async fn run(
     if !resolve_resp.status().is_success() {
         return Err(format!(
             "Failed to resolve project '{}/{}': Server responded with status {}",
-            username, project_name, resolve_resp.status()
+            username,
+            project_name,
+            resolve_resp.status()
         )
         .into());
     }
-    
+
     let resolve_data: serde_json::Value = resolve_resp.json().await?;
     let project_id = resolve_data["id"]
         .as_str()

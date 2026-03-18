@@ -193,7 +193,10 @@ pub async fn run(
         let remote_filename = format!("rev{}{}", rev, ext);
         let download_url = format!(
             "{}/api/v1/{}/artifacts/{}/{}",
-            server_url, config.project_key(), artifact_id, remote_filename
+            server_url,
+            config.project_key(),
+            artifact_id,
+            remote_filename
         );
 
         let mut file_content = client
