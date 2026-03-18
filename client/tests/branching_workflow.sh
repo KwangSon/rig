@@ -9,7 +9,7 @@ SERVER_URL="http://localhost:3000"
 API_URL="$SERVER_URL/api/v1"
 
 ADMIN_EMAIL="admin@example.com"
-ADMIN_PASSWORD="password"
+ADMIN_PASSWORD=""
 
 function cleanup {
     echo -e "\n--- Cleaning up ---"
@@ -37,7 +37,7 @@ curl -s -X POST "$API_URL/create_project" \
     -d "{\"name\":\"$PROJECT_NAME\"}" > /dev/null
 
 # Clone
-"$RIG_BIN" clone "ssh://rig@localhost:2222/$PROJECT_NAME" "$PROJECT_NAME" --username "DevUser"
+"$RIG_BIN" clone "ssh://rig@localhost:2222/admin/$PROJECT_NAME" "$PROJECT_NAME" --username "DevUser"
 cd "$PROJECT_NAME"
 
 # Commit base file
@@ -59,7 +59,7 @@ echo "Huge binary data here..." > huge_asset.bin
 dirty_checkout_output=$("$RIG_BIN" checkout main 2>&1 || true)
 echo "$dirty_checkout_output"
 
-if [[ "$dirty_checkout_output" == *"Checkout aborted"* ]]; then
+if [[ "$dirty_checkout_output" == *"Uncommitted changes"* ]]; then
     echo "PASS: Checkout correctly blocked due to dirty workspace!"
 else
     echo "FAIL: Checkout allowed dirty workspace to switch!"

@@ -35,8 +35,13 @@ The client's `.rig/` directory is always located at the **project root**, follow
 my-project/
 ├── .rig/
 │   ├── index                        ← Working directory state (JSON, atomically written)
+│   ├── config                       ← Local configuration containing project, server_url, username
+│   ├── HEAD                         ← Current branch pointer (e.g., "ref: refs/heads/main")
+│   ├── refs/
+│   │   └── heads/
+│   │       └── main                 ← Commit UUID of the latest commit on this branch
 │   └── objects/
-│       ├── <commit-uuid>.json       ← Local commit records (one file per commit)
+│       ├── <commit-uuid>            ← Local commit records (one JSON file per commit)
 │       └── ...
 │
 ├── assets/
@@ -64,8 +69,6 @@ The index tracks the current state of every artifact in the working directory. I
 ```json
 {
   "version": 1,
-  "branch": "main",
-  "head": "commit-uuid-or-null",
   "artifacts": {
     "assets/weapon.png": {
       "artifact_id": "550e8400-e29b-41d4-a716-446655440000",
@@ -90,17 +93,15 @@ The index tracks the current state of every artifact in the working directory. I
       "lock_generation": null,
       "staged": null
     }
-  }
+  },
+  "git_modules": {}
 }
 ```
 
 **Field definitions:**
 
 | Field | Description |
-|---|---|
 | `version` | Schema version for future migration |
-| `branch` | Currently active branch |
-| `head` | UUID of the latest local commit. `null` if no unpushed commits exist. Whether unpushed commits exist is determined by the presence of `.json` files in `.rig/objects/`, not this field alone |
 | `artifact_id` | Immutable UUID v4, generated once at `rig add` time and permanently retained. Never derived from the file path — this ensures locks and history survive `rig mv` |
 | `revision` | Server-side revision number. Incremented **only on successful `rig push`** by the server. Local commits do not change this value |
 | `local_state` | `"placeholder"` = 0-byte file, not yet pulled. `"ready"` = real binary present |
@@ -110,6 +111,7 @@ The index tracks the current state of every artifact in the working directory. I
 | `lock_generation` | UUID token from the server's `file_locks` table, used for push-time validation |
 | `staged.mtime` | File modification time (UTC epoch seconds) recorded at `rig add` |
 | `staged.size` | File size in bytes recorded at `rig add` |
+| `git_modules` | Maps subdirectories to Git repositories to be managed by `rig status/clone/push` (e.g. tracking `client/` inside the parent repository). |
 
 **`staged` field lifecycle:**
 - Set by `rig add` only.
@@ -119,7 +121,38 @@ The index tracks the current state of every artifact in the working directory. I
 
 ---
 
-### `.rig/objects/<commit-uuid>.json` Format
+### `.rig/config` Format
+
+Provides the local configuration for the repository, determining where it pushes to and the user identity. It is formatted in JSON.
+
+```json
+{
+  "project": "myho",
+  "server_url": "http://localhost:3000",
+  "username": "mm"
+}
+```
+
+| Field | Description |
+|---|---|
+| `project` | The logical project name recognized by the server. |
+| `server_url` | The base API URL or SSH URL where Rig connects for fetching/pushing. |
+| `username` | The username associated with the current clone, used as the default author for new commits. |
+
+---
+
+### `.rig/HEAD` and `.rig/refs/` Format
+
+Just like Git, Rig maintains explicit branch references. The branch and head state are extracted from the monolithic index and stored in individual text files.
+
+*   `HEAD`: Contains a pointer to the current branch, e.g., `ref: refs/heads/main`.
+*   `refs/heads/<branch>`: Contains the plain text UUID of the latest commit on that specific branch.
+
+When a new commit is created, the UUID in the appropriate `refs/heads/` file is updated.
+
+---
+
+### `.rig/objects/<commit-uuid>` Format
 
 Each local commit is stored as a single JSON file named by its UUID. The `parent` field forms a linked chain for ordering. Timestamps are UTC epoch seconds.
 
@@ -249,7 +282,7 @@ rename(.rig/index.tmp → .rig/index)
 ```
 write → .rig/objects/<uuid>.tmp
 fsync
-rename(.rig/objects/<uuid>.tmp → .rig/objects/<uuid>.json)
+rename(.rig/objects/<uuid>.tmp → .rig/objects/<uuid>)
 ```
 
 **pull / download write:**

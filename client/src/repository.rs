@@ -143,17 +143,21 @@ impl Repository {
 
     pub fn write_commit(&self, commit: &Commit) -> Result<(), Box<dyn std::error::Error>> {
         let content = serde_json::to_string_pretty(commit)?;
-        let path = self
-            .rig_dir
-            .join("objects")
-            .join(format!("{}.json", commit.id));
+        let path = self.rig_dir.join("objects").join(&commit.id);
         fs::write(path, content)?;
         Ok(())
     }
 
     pub fn read_commit(&self, hash: &str) -> Result<Option<Commit>, Box<dyn std::error::Error>> {
-        let path = self.rig_dir.join("objects").join(format!("{}.json", hash));
+        let path = self.rig_dir.join("objects").join(hash);
         if !path.exists() {
+            // Legacy fallback: try .json
+            let legacy_path = self.rig_dir.join("objects").join(format!("{}.json", hash));
+            if legacy_path.exists() {
+                let content = fs::read_to_string(legacy_path)?;
+                let commit: Commit = serde_json::from_str(&content)?;
+                return Ok(Some(commit));
+            }
             return Ok(None);
         }
         let content = fs::read_to_string(path)?;
@@ -171,7 +175,7 @@ impl Repository {
         for entry in fs::read_dir(objects_dir)? {
             let entry = entry?;
             let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("json") {
+            if path.is_file() {
                 let content = fs::read_to_string(&path)?;
                 if let Ok(commit) = serde_json::from_str::<Commit>(&content) {
                     commits.insert(commit.id.clone(), commit);

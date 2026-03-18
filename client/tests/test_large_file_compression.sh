@@ -12,7 +12,7 @@ API_URL="$SERVER_URL/api/v1"
 
 # Credentials
 ADMIN_EMAIL="admin@example.com"
-ADMIN_PASSWORD="password"
+ADMIN_PASSWORD=""
 
 # Save option check
 SAVE_PROJECT=false
@@ -50,7 +50,7 @@ AUTH_TOKEN=$(echo $LOGIN_RESP | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
 curl -s -X POST "$API_URL/create_project" -H "Content-Type: application/json" -H "Authorization: Bearer $AUTH_TOKEN" -d "{\"name\":\"$PROJECT_NAME\"}" > /dev/null
 
 # 1. Generate 4MB mixed file (2MB zero + 2MB random)
-"$RIG_BIN" clone "$SERVER_URL/$PROJECT_NAME" "$CLONE_DIR_1" --username "User1"
+"$RIG_BIN" clone "$SERVER_URL/admin/$PROJECT_NAME" "$CLONE_DIR_1" --username "User1"
 cd "$CLONE_DIR_1"
 
 echo "-> Generating 3MB mixed file (1.5MB zero + 1.5MB random)..."
@@ -67,7 +67,7 @@ echo "-> Pushing large file (check for 'Compressing' log)..."
 
 # 3. Pull from another side and Verify Integrity
 cd "$ROOT_DIR"
-"$RIG_BIN" clone "$SERVER_URL/$PROJECT_NAME" "$CLONE_DIR_2" --username "User2"
+"$RIG_BIN" clone "$SERVER_URL/admin/$PROJECT_NAME" "$CLONE_DIR_2" --username "User2"
 cd "$CLONE_DIR_2"
 
 echo "-> Pulling large file..."

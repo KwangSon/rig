@@ -11,7 +11,7 @@ API_URL="$SERVER_URL/api/v1"
 
 # Credentials
 ADMIN_EMAIL="admin@example.com"
-ADMIN_PASSWORD="password"
+ADMIN_PASSWORD=""
 
 # Cleanup
 function cleanup {
@@ -29,20 +29,24 @@ AUTH_TOKEN=$(echo $LOGIN_RESP | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
 curl -s -X POST "$API_URL/create_project" -H "Content-Type: application/json" -H "Authorization: Bearer $AUTH_TOKEN" -d "{\"name\":\"$PROJECT_NAME\"}" > /dev/null
 
 # 1. Clone & Push 2 revisions
-"$RIG_BIN" clone "$SERVER_URL/$PROJECT_NAME" "$PROJECT_NAME" --username "User1"
+"$RIG_BIN" clone "$SERVER_URL/admin/$PROJECT_NAME" "$PROJECT_NAME" --username "User1"
 cd "$PROJECT_NAME"
 
 echo "Content Rev 1" > file.txt
 "$RIG_BIN" add file.txt
 "$RIG_BIN" commit -m "Rev 1"
 "$RIG_BIN" push
-COMMIT1_HASH=$("$RIG_BIN" log | grep commit | head -n 1 | awk '{print $2}')
+# Log format: <hash> <message> - <author>
+COMMIT1_HASH=$("$RIG_BIN" log | grep "Rev 1" | awk '{print $1}')
+echo "Commit 1 Hash: $COMMIT1_HASH"
 
 "$RIG_BIN" lock file.txt
 echo "Content Rev 2" > file.txt
+"$RIG_BIN" add file.txt
 "$RIG_BIN" commit -m "Rev 2"
 "$RIG_BIN" push
-COMMIT2_HASH=$("$RIG_BIN" log | grep commit | head -n 1 | awk '{print $2}')
+COMMIT2_HASH=$("$RIG_BIN" log | grep "Rev 2" | awk '{print $1}')
+echo "Commit 2 Hash: $COMMIT2_HASH"
 
 # 2. Test pulling specific revision with # notation
 echo -e "\n-> Testing: rig pull file.txt#1"
@@ -62,12 +66,12 @@ else
     exit 1
 fi
 
-# 3. Test pulling with --revision flag (using # prefix)
-echo -e "\n-> Testing: rig pull file.txt --revision #1"
-"$RIG_BIN" pull file.txt --revision "#1"
+# 3. Test pulling with positional argument
+echo -e "\n-> Testing: rig pull file.txt 1"
+"$RIG_BIN" pull file.txt 1
 
 if [ -f "file.txt@1" ]; then
-    echo "Success: file.txt@1 exists after flag pull."
+    echo "Success: file.txt@1 exists after positional pull."
 fi
 
 # 4. Test pulling by commit with @ notation
@@ -80,7 +84,7 @@ fi
 # 5. Test pulling all at commit
 echo -e "\n-> Testing: rig pull * @$COMMIT1_HASH"
 mkdir -p restore_dir
-"$RIG_BIN" pull "*" --revision "@$COMMIT1_HASH" --out restore_dir
+"$RIG_BIN" pull "*" "@$COMMIT1_HASH" --out restore_dir
 if [ -f "restore_dir/file.txt" ]; then
     echo "Success: restore_dir/file.txt exists from commit * pull."
     CONTENT=$(cat "restore_dir/file.txt")

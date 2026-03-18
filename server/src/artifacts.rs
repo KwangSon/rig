@@ -819,11 +819,17 @@ pub async fn download_artifact_handler(
         Some(s) => s,
         None => return (StatusCode::NOT_FOUND, vec![]),
     };
+    let actual_filename = std::path::Path::new(&filename)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(&filename);
+
     let file_path = app_state
         .project_dir
         .join("artifacts")
         .join(id)
-        .join(filename);
+        .join(actual_filename);
+
     match fs::read(file_path) {
         Ok(bytes) => (StatusCode::OK, bytes),
         Err(_) => (StatusCode::NOT_FOUND, vec![]),

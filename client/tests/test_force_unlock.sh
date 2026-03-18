@@ -12,7 +12,7 @@ API_URL="$SERVER_URL/api/v1"
 
 # Credentials (from setup.sh)
 ADMIN_EMAIL="admin@example.com"
-ADMIN_PASSWORD="password"
+ADMIN_PASSWORD=""
 USER1_EMAIL="user1@example.com"
 USER1_PASSWORD="password"
 
@@ -81,8 +81,8 @@ fi
 # 2. Clone for User 1 (Regular User) and Admin
 cd "$ROOT_DIR"
 echo -e "\n--- 2. Cloning for User 1 and Admin ---"
-"$RIG_BIN" clone "$SERVER_URL/$PROJECT_NAME" "$CLONE_DIR_1" --username "User1"
-"$RIG_BIN" clone "$SERVER_URL/$PROJECT_NAME" "$CLONE_DIR_2" --username "Admin"
+"$RIG_BIN" clone "$SERVER_URL/admin/$PROJECT_NAME" "$CLONE_DIR_1" --username "User1"
+"$RIG_BIN" clone "$SERVER_URL/admin/$PROJECT_NAME" "$CLONE_DIR_2" --username "Admin"
 
 # 3. Add initial file as Admin and Push
 cd "$ROOT_DIR/$CLONE_DIR_2"

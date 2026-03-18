@@ -11,7 +11,7 @@ API_URL="$SERVER_URL/api/v1"
 
 # Credentials (from setup.sh)
 ADMIN_EMAIL="admin@example.com"
-ADMIN_PASSWORD="password"
+ADMIN_PASSWORD=""
 
 # Save option check
 SAVE_PROJECT=false
@@ -77,7 +77,7 @@ fi
 
 # 2. Clone the new project
 echo -e "\n--- 1. Cloning project: $PROJECT_NAME ---"
-"$RIG_BIN" clone "$SERVER_URL/$PROJECT_NAME" "$PROJECT_NAME" --username "Jone"
+"$RIG_BIN" clone "$SERVER_URL/admin/$PROJECT_NAME" "$PROJECT_NAME" --username "Jone"
 cd "$PROJECT_NAME"
 
 # 3. Add and Push first revision
@@ -90,7 +90,7 @@ echo "Revision 1 content" > file1.txt
 # 4. Clone project into a new directory
 cd "$ROOT_DIR"
 echo -e "\n--- 3. Cloning project into $CLONE_DIR ---"
-"$RIG_BIN" clone "$SERVER_URL/$PROJECT_NAME" "$CLONE_DIR" --username "CloneUser"
+"$RIG_BIN" clone "$SERVER_URL/admin/$PROJECT_NAME" "$CLONE_DIR" --username "CloneUser"
 
 # 5. Pull and Modify from Clone
 cd "$CLONE_DIR"

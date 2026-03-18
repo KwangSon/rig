@@ -61,7 +61,8 @@ pub async fn run(
         .unwrap_or("http://localhost:3000");
     let remote_index_url = format!("{}/api/v1/{}/index", server_url, config.project);
     let remote_resp = client.get(&remote_index_url).send().await?;
-    let remote_index: IndexFile = serde_json::from_str(&remote_resp.text().await?)?;
+    let remote_text = remote_resp.text().await?;
+    let remote_index: IndexFile = serde_json::from_str(&remote_text)?;
 
     // Resolution helpers
 
@@ -140,30 +141,33 @@ pub async fn run(
     // Pull artifacts
     let mut mut_local_index = local_index;
 
-    for (path, artifact_id, rev) in targets {
-        // --- Spec Check: Active local lock ---
-        if let Some(local_art) = mut_local_index.artifacts.get(&path)
-            && local_art.locked
-        {
-            return Err(format!(
-                "ERROR: File '{}' is locked locally. Push or unlock before pulling.",
-                path
-            )
-            .into());
+    for (path, artifact_id, rev) in &targets {
+        if requested_rev.is_none() && requested_commit.is_none() && out_arg.is_none() {
+            if let Some(local_art) = mut_local_index.artifacts.get(path)
+                && local_art.locked
+            {
+                return Err(format!(
+                    "ERROR: File '{}' is locked locally. Push or unlock before pulling.",
+                    path
+                )
+                .into());
+            }
         }
 
         let artifact_details = remote_index
             .artifacts
-            .get(&artifact_id)
+            .get(artifact_id)
             .ok_or_else(|| format!("Artifact details for {} not found on server", path))?;
 
         let revision_info = artifact_details
             .revisions
             .iter()
-            .find(|r| r.rev == rev)
+            .find(|r| r.rev == *rev)
             .ok_or_else(|| format!("Revision {} not found for {}", rev, path))?;
 
-        println!("-> Pulling {} (rev {})", path, rev);
+        let is_compressed = revision_info.compressed;
+
+        println!("-> Pulling {} (rev {}) (compressed={})", path, rev, is_compressed);
 
         // Download
         let ext = Path::new(&path)
@@ -185,7 +189,7 @@ pub async fn run(
             .await?
             .to_vec();
 
-        if revision_info.compressed {
+        if is_compressed {
             let mut decoder = GzDecoder::new(&file_content[..]);
             let mut decoded_data = Vec::new();
             decoder.read_to_end(&mut decoded_data)?;
@@ -194,7 +198,11 @@ pub async fn run(
 
         // Local path
         let local_path = if let Some(ref out) = out_arg {
-            current_dir.join(out)
+            if path_str == "*" || out.is_dir() || targets.len() > 1 {
+                current_dir.join(out).join(&path)
+            } else {
+                current_dir.join(out)
+            }
         } else if requested_rev.is_some() || requested_commit.is_some() {
             current_dir.join(format!("{}@{}", path, rev))
         } else {
@@ -221,15 +229,15 @@ pub async fn run(
 
         // Update local state if it's a standard pull
         if requested_rev.is_none() && requested_commit.is_none() && out_arg.is_none() {
-            if let Some(local_art) = mut_local_index.artifacts.get_mut(&path) {
+            if let Some(local_art) = mut_local_index.artifacts.get_mut(path) {
                 local_art.local_state = "ready".to_string();
-                local_art.revision = rev;
+                local_art.revision = *rev;
             } else {
                 mut_local_index.artifacts.insert(
                     path.clone(),
                     protocol::IndexArtifact {
                         artifact_id: artifact_id.clone(),
-                        revision: rev,
+                        revision: *rev,
                         local_state: "ready".to_string(),
                         stage: "none".to_string(),
                         locked: false,

@@ -9,7 +9,8 @@ To begin working on an existing Rig project, you must first clone it to your loc
 
 ```bash
 # Clone the repository
-rig clone http://localhost:3000/api/v1/my-project
+# Format: rig clone http://<server>/<username>/<project>
+rig clone http://localhost:3000/kwang/my-project
 
 # Move into the newly created directory
 cd my-project
